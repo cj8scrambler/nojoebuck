@@ -8,7 +8,7 @@
 #define MAX_DELAY      5  /* seconds */
 #define IN_INTERFACE   "hw:1"
 #define OUT_INTERFACE  "hw:0"
-#define NUM_FRAMES     128
+#define FRAMES_PER_BLOCK     128
 
 #define RATE           44100
 #define FORMAT         SND_PCM_FORMAT_S16_LE
@@ -18,12 +18,14 @@
 
 #define CAPTURE_PTR(x) ((x->buffer) + (x->capture_block * x->block_size))
 #define PLAY_PTR(x) ((x->buffer) + (x->play_block * x->block_size))
+#define DELAY_BLOCKS(x)  (((x) * FRAMES_PER_BLOCK * 1000) / RATE)
 
 struct global_data {
     bool run;
-    int delay;
-    int blocks;    /* number of NUM_FRAMES segments in buffer */
-    int block_size;    /* number of NUM_FRAMES segments in buffer */
+    int delay_blocks;  /* delay in blocks */
+    int delay_ms;      /* delay in ms */
+    int blocks;        /* blocks in buffer */
+    int block_size;
     int play_block, capture_block;
     int play_rate, cap_rate;
     char *buffer;
@@ -35,6 +37,8 @@ struct global_data {
  */
 int configure_stream(snd_pcm_t *handle, unsigned int rate) {
     int err;
+    unsigned int period;
+    snd_pcm_uframes_t frames;
     snd_pcm_hw_params_t *hw_params;
 
    if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0) {
@@ -84,6 +88,11 @@ int configure_stream(snd_pcm_t *handle, unsigned int rate) {
         goto exit;
     }
 
+    snd_pcm_hw_params_get_period_size(hw_params, &frames, 0);
+    snd_pcm_hw_params_get_period_time(hw_params, &period, NULL);
+    printf("frames=%ld  buffer size: %ld  period: %d\n",
+           frames, frames * NUM_CHANS * (snd_pcm_format_width(FORMAT) / 8), period);
+
     err = rate;
 exit:
     return err;
@@ -124,7 +133,7 @@ void *audio_in(void *ptr) {
             fprintf(stderr, "Warning: buffer overflow!\n");
         }
 
-        if ((err = snd_pcm_readi(cap_hndl, CAPTURE_PTR(data), NUM_FRAMES)) != NUM_FRAMES) {
+        if ((err = snd_pcm_readi(cap_hndl, CAPTURE_PTR(data), FRAMES_PER_BLOCK)) != FRAMES_PER_BLOCK) {
             fprintf (stderr, "read from audio interface failed (%s)\n", snd_strerror (err));
             goto close;
         }
@@ -141,6 +150,7 @@ done:
 void *audio_out(void *ptr) {
     struct global_data *data = ptr;
     int err;
+    unsigned int count;
     snd_pcm_t *play_hndl;
 
     printf ("Starting playback thread\n");
@@ -169,7 +179,22 @@ void *audio_out(void *ptr) {
     fprintf(stdout, "audio playback initialized at %.1fKHz\n", data->play_rate / 1000.0);
 
     while (data->run) {
-        /* do the magic here */
+        /* if play buffer is more than DELAY seconds behind record buffer */
+        if ((count = snd_pcm_writei(play_hndl, PLAY_PTR(data), FRAMES_PER_BLOCK)) == -EPIPE) {
+            printf("buffer underrun.\n");
+            snd_pcm_prepare(play_hndl);
+        } else if (count < 0) {
+            printf("ERROR. Can't write to PCM device. %s\n", snd_strerror(count));
+        } else {
+            if (count != FRAMES_PER_BLOCK) {
+                printf("only wrote %d/%d frames of the block\n", count, FRAMES_PER_BLOCK);
+            }
+
+            if (++(data->play_block) == data->blocks)
+            {
+                data->play_block = 0;
+            }
+        }
     }
     printf ("Shutting down playback thread\n");
 
@@ -186,8 +211,9 @@ int main(int argc, char* argv[])
     char c;
 
     data.run = true;
-    data.delay = DEFAULT_DELAY;
-    data.block_size = NUM_FRAMES * (snd_pcm_format_width(FORMAT) / 8);
+    data.delay_ms = DEFAULT_DELAY;
+    data.delay_blocks = DELAY_BLOCKS(DEFAULT_DELAY);
+    data.block_size = FRAMES_PER_BLOCK * (snd_pcm_format_width(FORMAT) / 8);
 
     size = MAX_DELAY * NUM_CHANS * RATE * (snd_pcm_format_width(FORMAT) / 8);
     if (size % data.block_size)
@@ -219,23 +245,25 @@ int main(int argc, char* argv[])
         return 1;
     }	  
 
-    scanf("%c", &c);
+    c = getchar();
     while (data.run && (c != 'q')) {
         if (c == 'k') {
-            if (data.delay < (MAX_DELAY * 1000 - 100)) {
-                data.delay += 100;
+            if (data.delay_ms < (MAX_DELAY * 1000 - 100)) {
+                data.delay_ms += 100;
 	    } else {
-                data.delay = MAX_DELAY * 1000;
+                data.delay_ms = MAX_DELAY * 1000;
 	    }
 	} else if (c == 'j') {
-            if (data.delay > 100) {
-                data.delay -= 100;
+            if (data.delay_ms > 100) {
+                data.delay_ms -= 100;
 	    } else {
-                data.delay = 0;
+                data.delay_ms = 0;
 	    }
 	}
-	printf ("New delay: %2.1f\n", data.delay / 1000.0);
+	data.delay_blocks = DELAY_BLOCKS(data.delay_ms);
+	printf ("New delay: %2.1fS (%d blocks)\n", data.delay_ms / 1000.0, data.delay_blocks);
         scanf("%c", &c);
+        c = getchar();
     }
     printf("Shutting Down\n");
     data.run = false;
