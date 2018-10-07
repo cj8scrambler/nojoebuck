@@ -1,47 +1,76 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <alsa/asoundlib.h>
 
-#define DEFAULT_DELAY  2500  /* ms */
-#define MAX_DELAY      5  /* seconds */
-#define IN_INTERFACE   "hw:1"
-#define OUT_INTERFACE  "hw:0"
-#define FRAMES_PER_BLOCK     128
+#define DEFAULT_DELAY      2500  /* ms */
+#define MAX_DELAY_S        120   /* seconds */
+#define IN_INTERFACE       "hw:1"
+#define OUT_INTERFACE      "hw:1"
 
-#define RATE           44100
-#define FORMAT         SND_PCM_FORMAT_S16_LE
-#define NUM_CHANS      2
-#define ACCESS_TYPE    SND_PCM_ACCESS_RW_INTERLEAVED
-#define IDLE_TIME      1000 /* uS in idle loop */
+/* Audio Params */
+#define RATE               44100
+#define FORMAT             SND_PCM_FORMAT_S16_LE
+#define NUM_CHANS          2
+#define ACCESS_TYPE        SND_PCM_ACCESS_RW_INTERLEAVED
+#define BYTES_PER_FRAME    ((snd_pcm_format_width(FORMAT)/8) * NUM_CHANS)
+#define FRAMES_PER_PERIOD  256
+#define BYTES_PER_PERIOD   (FRAMES_PER_PERIOD * BYTES_PER_FRAME)
 
-#define CAPTURE_PTR(x) ((x->buffer) + (x->capture_block * x->block_size))
-#define PLAY_PTR(x) ((x->buffer) + (x->play_block * x->block_size))
-#define DELAY_BLOCKS(x)  (((x) * FRAMES_PER_BLOCK * 1000) / RATE)
+#define CAPTURE_PTR(x) (((x)->buffer) + ((x)->capture_period * BYTES_PER_PERIOD))
+#define PLAY_PTR(x) (((x)->buffer) + ((x)->play_period * BYTES_PER_PERIOD))
 
-struct global_data {
-    bool run;
-    int delay_blocks;  /* delay in blocks */
-    int delay_ms;      /* delay in ms */
-    int blocks;        /* blocks in buffer */
-    int block_size;
-    int play_block, capture_block;
-    int play_rate, cap_rate;
-    char *buffer;
-};
+typedef struct global_data {
+    unsigned int delay_ms;       /* delay in ms */
+    unsigned int delay_periods;  /* delay in periods */
+
+    unsigned int period_time;    /* length of a period in us */
+
+    unsigned int play_period, capture_period;
+    unsigned int play_rate, cap_rate;
+
+    unsigned int num_periods;    /* # of periods in buffer */
+    uint8_t *buffer;
+} globals;
+
+void update_delay(globals *config, unsigned int delay_ms) {
+    if (config) {
+        config->delay_ms = delay_ms;
+        config->delay_periods = (delay_ms * 1000) / config->period_time;
+        printf ("Updated delay to %.1f sec (%d periods)\n",
+                config->delay_ms / 1000.0, config->delay_periods);
+    }
+}
+
+/* number of periods behind playback is from capture */
+unsigned int playback_delta(globals *config) {
+    if (!config) {
+        return 0;
+    }
+    if (config->capture_period >= config->play_period) {
+        return (config->capture_period - config->play_period);
+    } else {
+        return ((config->num_periods - config->play_period) + config->capture_period);
+    }
+}
 
 /*
  * return < 0 on err
  * return rate on success
  */
-int configure_stream(snd_pcm_t *handle, unsigned int rate) {
-    int err;
-    unsigned int period;
-    snd_pcm_uframes_t frames;
+int configure_stream(globals *config, snd_pcm_t *handle, unsigned int rate) {
+    unsigned long tmp;
+    int dir, err = -1;
     snd_pcm_hw_params_t *hw_params;
 
-   if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0) {
+    if (!config || !handle) {
+        fprintf(stderr, "Invalid call to configure stream\n");
+        goto exit;
+    }
+
+    if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0) {
         fprintf(stderr, "cannot allocate hardware parameter structure (%s)\n",
                  snd_strerror(err));
         goto exit;
@@ -76,11 +105,21 @@ int configure_stream(snd_pcm_t *handle, unsigned int rate) {
         goto exit;
     }
 
+    tmp = FRAMES_PER_PERIOD;
+    if ((err = snd_pcm_hw_params_set_period_size_near(handle, hw_params, &tmp, &dir)) < 0) {
+        fprintf(stderr, "cannot set channel count (%s)\n", snd_strerror(err));
+        goto exit;
+    }
+    if (tmp != FRAMES_PER_PERIOD) {
+        fprintf (stderr, "Error: Could not set period size (%ld != %d)\n",
+                 tmp, FRAMES_PER_PERIOD);
+        goto exit;
+    }
+
     if ((err = snd_pcm_hw_params(handle, hw_params)) < 0) {
         fprintf(stderr, "cannot set parameters (%s)\n", snd_strerror(err));
         goto exit;
     }
-    snd_pcm_hw_params_free (hw_params);
 	
     if ((err = snd_pcm_prepare (handle)) < 0) {
         fprintf (stderr, "cannot prepare audio interface for use (%s)\n",
@@ -88,22 +127,23 @@ int configure_stream(snd_pcm_t *handle, unsigned int rate) {
         goto exit;
     }
 
-    snd_pcm_hw_params_get_period_size(hw_params, &frames, 0);
-    snd_pcm_hw_params_get_period_time(hw_params, &period, NULL);
-    printf("frames=%ld  buffer size: %ld  period: %d\n",
-           frames, frames * NUM_CHANS * (snd_pcm_format_width(FORMAT) / 8), period);
+    snd_pcm_hw_params_get_period_time(hw_params, &config->period_time, NULL);
 
     err = rate;
 exit:
+    snd_pcm_hw_params_free (hw_params);
     return err;
 }
 
-void *audio_in(void *ptr) {
-    struct global_data *data = ptr;
-    int err;
-    snd_pcm_t *cap_hndl;
 
-    printf("Starting audio capture\n");
+int main(int argc, char* argv[])
+{
+    globals config;
+    int err;
+    unsigned int count;
+    unsigned long size;
+    snd_pcm_t *cap_hndl;
+    snd_pcm_t *play_hndl;
 
     if ((err = snd_pcm_open(&cap_hndl, IN_INTERFACE,
                              SND_PCM_STREAM_CAPTURE, 0)) < 0) {
@@ -111,163 +151,99 @@ void *audio_in(void *ptr) {
                  IN_INTERFACE, snd_strerror(err));
         goto done;
     }
-
-    if ((data->cap_rate = configure_stream(cap_hndl, RATE)) < 0) {
-        goto done;
+    if ((config.cap_rate = configure_stream(&config, cap_hndl, RATE)) < 0) {
+        goto close_cap;
     }
+    fprintf(stdout, "audio capture initialized at %.1fKHz\n", config.cap_rate / 1000.0);
 
-    fprintf(stdout, "audio capture initialized at %.1fKHz\n", data->cap_rate / 1000.0);
+    if ((err = snd_pcm_open(&play_hndl, OUT_INTERFACE,
+                             SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
+        fprintf(stderr, "cannot open audio device %s (%s)\n",
+                 OUT_INTERFACE, snd_strerror(err));
+        goto close_cap;
+    }
+    if ((config.play_rate = configure_stream(&config, play_hndl, config.cap_rate)) < 0) {
+        goto close_play;
+    }
+    if (config.play_rate != config.cap_rate) {
+        fprintf(stderr, "Error: Capture rate (%d) != Playback rate (%d)\n",
+                config.cap_rate, config.play_rate); 
+        goto close_play;
+    }
+    fprintf(stdout, "audio playback initialized at %.1fKHz\n", config.play_rate / 1000.0);
 
-    while (data->run) {
-        if (++(data->capture_block) == data->blocks)
+    update_delay(&config, DEFAULT_DELAY);
+
+    config.num_periods = (MAX_DELAY_S * 1000000) / config.period_time;
+    if ( (MAX_DELAY_S * 1000000) % config.period_time) {
+        config.num_periods++;
+    }
+    size = config.num_periods * BYTES_PER_PERIOD;
+    config.buffer = malloc(size);
+    if (!config.buffer) {
+        fprintf(stderr, "Could allocate buffer memory\n");
+        return 1;
+    }
+    fprintf(stdout, "Initialized:\n");
+    fprintf(stdout, "  Period: %.1f ms  (%d bytes)\n", config.period_time/1000.0, BYTES_PER_PERIOD); 
+    fprintf(stdout, "  Num Periods: %d\n", config.num_periods);
+    fprintf(stdout, "  Buffer size: %.1f KB\n", size/1000.0);
+
+    config.play_period = 0;
+    config.capture_period = 0;
+
+    while (1) {
+        /* capture a period */
+        if (++(config.capture_period) == config.num_periods)
 	{
             fprintf(stderr, "Write wraparound\n");
-            data->capture_block = 0;
+            config.capture_period = 0;
         }
-	if (data->capture_block == data->play_block)
+	if (config.capture_period == config.play_period)
 	{
-	    if (++(data->play_block) == data->blocks)
+	    if (++(config.play_period) == config.num_periods)
             {
-                data->play_block = 0;
+                config.play_period = 0;
             }
             fprintf(stderr, "Warning: buffer overflow!\n");
         }
 
-        if ((err = snd_pcm_readi(cap_hndl, CAPTURE_PTR(data), FRAMES_PER_BLOCK)) != FRAMES_PER_BLOCK) {
+        if ((err = snd_pcm_readi(cap_hndl, CAPTURE_PTR(&config), FRAMES_PER_PERIOD)) != FRAMES_PER_PERIOD) {
             fprintf (stderr, "read from audio interface failed (%s)\n", snd_strerror (err));
-            goto close;
+            goto free;
+        }
+//printf("C: %d/%d\n", playback_delta(&config), config.delay_periods);
+//fflush(stdout);
+
+        /* if play buffer is more than DELAY behind record buffer then play */
+        if (playback_delta(&config) >= config.delay_periods) {
+            /* TODO: if delta > delay_periods: increase playback speed to catch up */
+            if ((count = snd_pcm_writei(play_hndl, PLAY_PTR(&config), FRAMES_PER_PERIOD)) == -EPIPE) {
+                printf("buffer underrun.\n");
+                snd_pcm_prepare(play_hndl);
+            } else if (count < 0) {
+                printf("ERROR. Can't write to PCM device. %s\n", snd_strerror(count));
+                goto free;
+            } else {
+//printf("P\n");
+//fflush(stdout);
+                if (count != FRAMES_PER_PERIOD) {
+                    printf("only wrote %d/%d frames of the block\n", count, FRAMES_PER_PERIOD);
+                }
+            }
+
+            if (++(config.play_period) == config.num_periods)
+            {
+                config.play_period = 0;
+            }
         }
     }
-
-    printf ("Shutting down capture thread\n");
-close:
+free:
+    free(config.buffer);
+close_play:
+    snd_pcm_close (play_hndl);
+close_cap:
     snd_pcm_close (cap_hndl);
 done:
-    data->run = false;
-    return NULL;
-}
-
-void *audio_out(void *ptr) {
-    struct global_data *data = ptr;
-    int err;
-    unsigned int count;
-    snd_pcm_t *play_hndl;
-
-    printf ("Starting playback thread\n");
-
-    if ((err = snd_pcm_open(&play_hndl, OUT_INTERFACE, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-        fprintf(stderr, "cannot open audio device %s (%s)\n",
-                 IN_INTERFACE, snd_strerror(err));
-        goto done;
-    }
-
-    /* wait for cap_rate to be  initialized */
-    while (!data->cap_rate && data->run) {
-        usleep(IDLE_TIME);
-    }
-
-    if ((data->play_rate = configure_stream(play_hndl, data->cap_rate)) < 0) {
-        goto done;
-    }
-
-    if (data->play_rate != data->cap_rate) {
-        fprintf(stderr, "Error: Capture rate (%d) != Playback rate (%d)\n",
-                data->cap_rate, data->play_rate); 
-        goto done;
-    }
-
-    fprintf(stdout, "audio playback initialized at %.1fKHz\n", data->play_rate / 1000.0);
-
-    while (data->run) {
-        /* if play buffer is more than DELAY seconds behind record buffer */
-        if ((count = snd_pcm_writei(play_hndl, PLAY_PTR(data), FRAMES_PER_BLOCK)) == -EPIPE) {
-            printf("buffer underrun.\n");
-            snd_pcm_prepare(play_hndl);
-        } else if (count < 0) {
-            printf("ERROR. Can't write to PCM device. %s\n", snd_strerror(count));
-        } else {
-            if (count != FRAMES_PER_BLOCK) {
-                printf("only wrote %d/%d frames of the block\n", count, FRAMES_PER_BLOCK);
-            }
-
-            if (++(data->play_block) == data->blocks)
-            {
-                data->play_block = 0;
-            }
-        }
-    }
-    printf ("Shutting down playback thread\n");
-
-done:
-    data->run = false;
-    return NULL;
-}
-
-int main(int argc, char* argv[])
-{
-    struct global_data data;
-    pthread_t input, output;
-    long size;
-    char c;
-
-    data.run = true;
-    data.delay_ms = DEFAULT_DELAY;
-    data.delay_blocks = DELAY_BLOCKS(DEFAULT_DELAY);
-    data.block_size = FRAMES_PER_BLOCK * (snd_pcm_format_width(FORMAT) / 8);
-
-    size = MAX_DELAY * NUM_CHANS * RATE * (snd_pcm_format_width(FORMAT) / 8);
-    if (size % data.block_size)
-    {
-        data.blocks = (size / data.block_size) + 1;
-    }
-    else
-    {
-        data.blocks = (size / data.block_size);
-    }
-    size = data.blocks * data.block_size;
-    data.buffer = malloc(size);
-    if (!data.buffer) {
-        fprintf(stderr, "Could allocate buffer memory\n");
-        return 1;
-    }
-    printf("malloc'ed %ld KB\n", size / 1024);
-
-    data.play_block = 0;
-    data.capture_block = 0;
-
-    if(pthread_create(&input, NULL, audio_in, &data)) {
-        fprintf(stderr, "Could not create audio input thread\n");
-        return 1;
-    }	  
-
-    if(pthread_create(&output, NULL, audio_out, &data)) {
-        fprintf(stderr, "Could not create audio output thread\n");
-        return 1;
-    }	  
-
-    c = getchar();
-    while (data.run && (c != 'q')) {
-        if (c == 'k') {
-            if (data.delay_ms < (MAX_DELAY * 1000 - 100)) {
-                data.delay_ms += 100;
-	    } else {
-                data.delay_ms = MAX_DELAY * 1000;
-	    }
-	} else if (c == 'j') {
-            if (data.delay_ms > 100) {
-                data.delay_ms -= 100;
-	    } else {
-                data.delay_ms = 0;
-	    }
-	}
-	data.delay_blocks = DELAY_BLOCKS(data.delay_ms);
-	printf ("New delay: %2.1fS (%d blocks)\n", data.delay_ms / 1000.0, data.delay_blocks);
-        scanf("%c", &c);
-        c = getchar();
-    }
     printf("Shutting Down\n");
-    data.run = false;
-    pthread_join(input, NULL);
-    pthread_join(output, NULL);
-    free(data.buffer);
 }
