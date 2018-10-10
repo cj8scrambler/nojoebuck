@@ -1,5 +1,5 @@
-CFLAGS=-Wall
-LDFLAGS=-lasound -lpthread
+CFLAGS=-Wall -Werror
+LDFLAGS=-lasound -lpthread -lzmq
 
 all: nojoebuck
 
