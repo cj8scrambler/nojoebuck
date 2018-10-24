@@ -31,7 +31,8 @@
  * "B:[101-199]" N/A                           Buffer emptying (playing at 2x speed to empty buffer)
  * "B:"          request current buffer status 
  */
-#define UI_PORT            "tcp://*:1908"
+#define UI_OUT             "ipc:///tmp/nojobuck_status"
+#define UI_IN              "ipc:///tmp/nojobuck_cmd"
 #define MAX_UI_CMD         16
 
 /* Audio Params */
@@ -56,7 +57,8 @@ typedef enum playback_state {
 
 typedef struct global_data {
     playback_state state;
-    void *ui_zmq;
+    void *ui_out;
+    void *ui_in;
 
     snd_pcm_t *cap_hndl;
     snd_pcm_t *play_hndl;
@@ -246,17 +248,23 @@ int send_buffer_status(globals *config) {
     }
 
 #ifdef DEBUG
-    printf("Sending: %s\n", buffer);
+    printf("\nSending: %s:", buffer);
 #endif
-    if (0 != (ret = zmq_send (config->ui_zmq, buffer, strlen(buffer), ZMQ_NOBLOCK))) {
+    if (0 != (ret = zmq_send(config->ui_out, buffer, strlen(buffer), ZMQ_NOBLOCK))) {
         if (errno == EAGAIN) {
             /* ignore missing client */
             ret = 0;
+#ifdef DEBUG
+            printf("  NO CLIENT\n");
+#endif
         } else {
             fprintf(stderr, "Error sending zmq msg [%s]: %s\n",
                     buffer, strerror(errno));
         }
     }
+#ifdef DEBUG
+    else printf("  SUCCESS\n");
+#endif
 
     return ret;
 }
@@ -360,6 +368,8 @@ int main(int argc, char* argv[])
     globals config;
     int err;
     unsigned long size;
+    void *zmq_context_in = zmq_ctx_new();
+    void *zmq_context_out = zmq_ctx_new();
     char buffer[MAX_UI_CMD+1];
 
     memset(&config, 0, sizeof(config));
@@ -368,7 +378,7 @@ int main(int argc, char* argv[])
                              SND_PCM_STREAM_CAPTURE, 0)) < 0) {
         fprintf(stderr, "cannot open audio device %s (%s)\n",
                  IN_INTERFACE, snd_strerror(err));
-        goto done;
+        goto free_contexts;
     }
     if ((config.cap_rate = configure_stream(&config, config.cap_hndl, RATE)) < 0) {
         goto close_cap;
@@ -404,15 +414,21 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    config.ui_zmq = zmq_socket (zmq_ctx_new(), ZMQ_PAIR);
-    if (0 != zmq_bind (config.ui_zmq, UI_PORT)) {
-        fprintf(stderr, "Could not create zmq socket\n");
+    config.ui_out = zmq_socket (zmq_context_out, ZMQ_PUSH);
+    if (0 != zmq_bind (config.ui_out, UI_OUT)) {
+        fprintf(stderr, "Could not create outgoing zmq socket\n");
         goto free;
+    }
+
+    config.ui_in = zmq_socket (zmq_ctx_new(), ZMQ_PULL);
+    if (0 != zmq_bind (config.ui_in, UI_IN)) {
+        fprintf(stderr, "Could not create incoming zmq socket\n");
+        goto close_out_socket;
     }
 
     if(pthread_create(&(config.audio_thread), NULL, audio_thread, &config)) {
         fprintf(stderr, "Could not create audio thread\n");
-        goto close_socket;
+        goto close_in_socket;
     }
 
     fprintf(stdout, "Initialized:\n");
@@ -425,7 +441,7 @@ int main(int argc, char* argv[])
     config.capture_period = 0;
 
     while (config.state) {
-	size = zmq_recv (config.ui_zmq, buffer, MAX_UI_CMD, 0);
+	size = zmq_recv (config.ui_in, buffer, MAX_UI_CMD, 0);
         if (size < 0) {
             fprintf(stderr, "Error receiving zmq msg: %s\n", strerror(errno));
         } else {
@@ -445,7 +461,7 @@ int main(int argc, char* argv[])
 #ifdef DEBUG
                     printf("Sending: %s\n", buffer);
 #endif
-                    if (0 != zmq_send (config.ui_zmq, buffer, strlen(buffer), 0)) {
+                    if (0 != zmq_send (config.ui_out, buffer, strlen(buffer), 0)) {
                         fprintf(stderr, "Error sending zmq msg [%s]: %s\n",
                                 buffer, strerror(errno));
                     }
@@ -461,14 +477,18 @@ int main(int argc, char* argv[])
 
     pthread_cancel(config.audio_thread);
     pthread_join(config.audio_thread, NULL);
-close_socket:
-    /* ? */
+close_in_socket:
+    zmq_close (config.ui_in);
+close_out_socket:
+    zmq_close (config.ui_out);
 free:
     free(config.buffer);
 close_play:
     snd_pcm_close(config.play_hndl);
 close_cap:
     snd_pcm_close(config.cap_hndl);
-done:
+free_contexts:
+    zmq_ctx_destroy (zmq_context_out);
+    zmq_ctx_destroy (zmq_context_in);
     printf("Shutting Down\n");
 }

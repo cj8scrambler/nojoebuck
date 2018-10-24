@@ -4,7 +4,8 @@ import logging
 import time
 
 BUF_Y = 5
-UI_PORT = "tcp://localhost:1908"
+UI_CMD = "ipc:///tmp/nojobuck_cmd"
+UI_STATUS = "ipc:///tmp/nojobuck_status"
 MAX_DELAY = 120000
 
 delay = 2500
@@ -91,7 +92,7 @@ def redraw(stdscr):
 
     # Don't run more than once every 100 ms
     now = time.time()
-    if ((now - last_redraw) < 0.100):
+    if ((buf != 100) and (now - last_redraw) < 0.100):
         logging.debug('%.2f skip redraw' % (now))
         return
 
@@ -109,22 +110,24 @@ def main(stdscr):
     global delay
     global buf
 
+    logging.basicConfig(filename='log',level=logging.ERROR)
 
-    logging.basicConfig(filename='log',level=logging.DEBUG)
+    socket_cmd = zmq.Context().socket(zmq.PUSH)
+    socket_cmd.connect (UI_CMD)
 
-    socket = zmq.Context().socket(zmq.PAIR)
-    socket.connect (UI_PORT)
+    socket_status = zmq.Context().socket(zmq.PULL)
+    socket_status.connect (UI_STATUS)
 
     # query the current delay
-    socket.send("D:");
-    cmd = socket.recv().split(':');
+    socket_cmd.send("D:");
+    cmd = socket_status.recv().split(':');
     delay = int(cmd[1]);
     logging.debug('got delay query response: %d' % (delay))
     new_delay = delay
 
     # query the current buffer
-    socket.send("B:");
-    cmd = socket.recv().split(':');
+    socket_cmd.send("B:");
+    cmd = socket_status.recv().split(':');
     buf = int(cmd[1]);
     logging.debug('got buffer query response: %d' % (buf))
 
@@ -153,12 +156,12 @@ def main(stdscr):
             # send delay update message
             delay = new_delay
             logging.debug('Updated delay: %d' % (delay))
-            socket.send("D:%d" % (delay))
+            socket_cmd.send("D:%d" % (delay))
             redraw(stdscr)
 
         message = ""
         try:
-            message = socket.recv(flags=zmq.NOBLOCK)
+            message = socket_status.recv(flags=zmq.NOBLOCK)
         except zmq.ZMQError: 
             pass
 
