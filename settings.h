@@ -1,0 +1,13 @@
+#define MAX_AUDIO_DEVNAME_LEN  64
+
+typedef struct settings {
+  char cap_int[MAX_AUDIO_DEVNAME_LEN];
+  char play_int[MAX_AUDIO_DEVNAME_LEN];
+  uint32_t rate;
+  uint32_t memory;
+  uint8_t bits;
+  uint8_t verbose;
+  snd_pcm_format_t format;
+} settings_t;
+
+void settings_get_opts(settings_t *settings, int argc, char *argv[]);
