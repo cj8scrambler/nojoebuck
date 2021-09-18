@@ -8,6 +8,7 @@ typedef struct settings {
   uint8_t bits;
   uint8_t verbose;
   snd_pcm_format_t format;
+  uint32_t delay_ms;
 } settings_t;
 
 void settings_get_opts(settings_t *settings, int argc, char *argv[]);

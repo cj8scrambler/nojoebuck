@@ -11,15 +11,15 @@
 static void usage(settings_t *settings, int retcode)
 {
   printf("nojoebuck [options]...\n");
-  printf("-b, --bits=[16|24|32]  Bit depth.  Default: %d\n", settings->bits);
-  printf("-c, --capture=NAME     Name of capture interface (list with aplay -L)."
+  printf("  -b, --bits=[16|24|32]  Bit depth.  Default: %d\n", settings->bits);
+  printf("  -c, --capture=NAME     Name of capture interface (list with aplay -L)."
          "  Default: %s\n", settings->cap_int);
-  printf("-h, --help             This usage message\n");
-  printf("-m, --memory=SIZE      Memory buffer to reserve in MB.  Default: %.1f\n",
+  printf("  -h, --help             This usage message\n");
+  printf("  -m, --memory=SIZE      Memory buffer to reserve in MB.  Default: %.1f\n",
          settings->memory/(1024.0*1024.0));
-  printf("-p, --playback=NAME    Name of playback interface (list with aplay -L)."
+  printf("  -p, --playback=NAME    Name of playback interface (list with aplay -L)."
          "  Default: %s\n", settings->play_int);
-  printf("-r, --rate=RATE        Sample rate.  Default: %d\n", settings->rate);
+  printf("  -r, --rate=RATE        Sample rate.  Default: %d\n", settings->rate);
 
   exit(retcode);
 }

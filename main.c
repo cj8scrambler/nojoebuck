@@ -13,8 +13,8 @@
 #define DEFAULT_DELAY      2500  /* ms */
 #define MAX_DELAY_S        120   /* seconds */
 #define PLAYBACK_BUFFER    2     /* number of periods to keep in sound card playback buffer */
-#define IN_INTERFACE       "hw:1"
-#define OUT_INTERFACE      "hw:0"
+#define IN_INTERFACE       "hw:CARD=audioinjectorpi,DEV=0"
+#define OUT_INTERFACE      "hw:CARD=audioinjectorpi,DEV=0"
 #define IDLE_TIME          1000 /* uS in idle loop */
 
 /*
@@ -250,7 +250,8 @@ int send_buffer_status(globals *config) {
 #ifdef DEBUG
     printf("\nSending: %s:", buffer);
 #endif
-    if (0 != (ret = zmq_send(config->ui_out, buffer, strlen(buffer), ZMQ_NOBLOCK))) {
+    if (0 != (ret = zmq_send(config->ui_out, buffer,
+                             strlen(buffer), ZMQ_NOBLOCK))) {
         if (errno == EAGAIN) {
             /* ignore missing client */
             ret = 0;
@@ -461,7 +462,8 @@ int main(int argc, char* argv[])
 #ifdef DEBUG
                     printf("Sending: %s\n", buffer);
 #endif
-                    if (0 != zmq_send (config.ui_out, buffer, strlen(buffer), 0)) {
+                    if (0 != zmq_send (config.ui_out, buffer,
+                                       strlen(buffer), 0)) {
                         fprintf(stderr, "Error sending zmq msg [%s]: %s\n",
                                 buffer, strerror(errno));
                     }
