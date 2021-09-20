@@ -1,19 +1,22 @@
 #define ALSA_PCM_NEW_HW_PARAMS_API
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <alsa/asoundlib.h>
 
 #include "audio.h"
 #include "n2.h"
 
 #define HYSTERESIS  2  /* number of periods still considered in sync */
+#define PERIODS_IN_ALSABUF  10  /* Number of periods to keep in the ALSA buffer */
 #define CAPTURE_PTR(x) (((x)->buffer) + ((x)->cap * (x)->period_bytes))
 #define PLAY_PTR(x) (((x)->buffer) + ((x)->play * (x)->period_bytes))
-#define EVEN_CAP_PERIOD(x) (!((x)->cap % 2))
 
+/* get actual delta in periods */
 static unsigned int get_actual_delta(buffer_config_t *bc)
 {
-  unsigned int delta = 0;
+  /* Count the periods in the ALSA playback buffer */
+  unsigned int delta = bc->num_periods -  snd_pcm_avail(bc->play_hndl) / bc->period_frames;
   if (!bc) {
     fprintf(stderr, "%s(): Invalid call\n", __func__);  
     return 0;
@@ -22,9 +25,9 @@ static unsigned int get_actual_delta(buffer_config_t *bc)
   pthread_mutex_lock(&bc->lock);
 
   if (bc->cap >= bc->play) {
-    delta =  bc->cap - bc->play;
+    delta +=  bc->cap - bc->play;
   } else {
-    delta = (bc->num_periods - bc->play) + bc->cap;
+    delta += (bc->num_periods - bc->play) + bc->cap;
   }
   pthread_mutex_unlock(&bc->lock);
 
@@ -39,16 +42,16 @@ void advance_ptr(buffer_config_t *bc, unsigned int *ptr) {
     *ptr = 0;
   }
 
-  if (bc->cap == bc->play) {
-    if (++(bc->play) == bc->num_periods) {
-      bc->play = 0;
-    }
-    fprintf(stderr, "Warning: buffer overflow!\n");
-  }
+//  if (bc->cap == bc->play) {
+//    if (++(bc->play) == bc->num_periods) {
+//      bc->play = 0;
+//    }
+//    fprintf(stderr, "Warning: buffer overflow!\n");
+//  }
 }
 
 void advance_play_ptr(buffer_config_t *bc) {
-  return advance_ptr(bc, &(bc->play));
+  advance_ptr(bc, &(bc->play));
 }
 
 void advance_cap_ptr(buffer_config_t *bc) {
@@ -56,7 +59,7 @@ void advance_cap_ptr(buffer_config_t *bc) {
 }
 
 int write_playback_period(buffer_config_t *bc) {
-  int err = snd_pcm_writei(bc->play_hndl, PLAY_PTR(bc), bc->period_bytes);
+  int err = snd_pcm_writei(bc->play_hndl, PLAY_PTR(bc), bc->period_frames);
 
   if (err == -EPIPE) {
     printf("Warning: playback buffer underrun.\n");
@@ -65,8 +68,8 @@ int write_playback_period(buffer_config_t *bc) {
   } else if (err < 0) {
     fprintf (stderr, "Write to audio interface failed (%s)\n", snd_strerror (err));
     bc->state = STOP;
-  } else if (err != bc->period_bytes) {
-    fprintf(stderr, "Warning: only wrote %d/%ld bytes\n", err, bc->period_bytes);
+  } else if (err != bc->period_frames) {
+    fprintf(stderr, "Warning: only wrote %d/%ld frames\n", err, bc->period_frames);
     err = 0;
   } else {
     err = 0;
@@ -77,67 +80,66 @@ int write_playback_period(buffer_config_t *bc) {
 
 void *audio_io_thread(void *ptr) {
   int err;
+  static bool alternate = 0;
   buffer_config_t *bc = (buffer_config_t *)ptr;
   int actual_delta;
-  unsigned int diff;
-
-  // do blocking read on capture interface to get next period; put at the capture ptr & increment
-  // if |actual_delta - target_delta| < histeris:
-  //   state = PLAY
-  //   write 1 period to playback
-  //   inc playback ptr by one
-  // else if actual_delta < target_delta:
-  //   /* double write playback data */
-  //   state = BUFFER
-  //   write 1 period to playback
-  //   if frame is even: inc playback ptr
-  // else 
-  //   /* write 1/2 playback data */
-  //   state = DOUBLE
-  //   write 1 period to playback
-  //   inc playback ptr by two
-
+  unsigned int diff, period;
 
   while (bc->state) {
     actual_delta = get_actual_delta(bc);
     diff = abs(actual_delta - bc->target_delta_p);
 
     /* Blocking read from capture interface (provies throttle to while loop */
-    if ((err = snd_pcm_readi(bc->cap_hndl, CAPTURE_PTR(bc), bc->period_bytes))
-        != bc->period_bytes) {
+    if ((err = snd_pcm_readi(bc->cap_hndl, CAPTURE_PTR(bc), bc->period_frames))
+        != bc->period_frames) {
       fprintf (stderr, "Read from audio interface failed (%s)\n", snd_strerror (err));
       bc->state = STOP;
       goto done;
     }
     advance_cap_ptr(bc);
 
-    /* Write one period to playback */
-    if (write_playback_period(bc) != 0) {
-      bc->state = STOP;
-      goto done;
-    } 
-    /* advancing of playbck ptr depends on state */
-    if (diff <= HYSTERESIS) {
-      /* advance 1 for each frame played in PLAY mode */
-      bc->state = PLAY;
-      advance_play_ptr(bc);
-    } else if (actual_delta  < bc->target_delta_p) {
-      /* advance 1/2 for each frame played in BUFFER mode */
-      bc->state = BUFFER;
-      if (EVEN_CAP_PERIOD(bc)) {
+    /* Loop from: # of periods currently in the ALSA playback buffer 
+     * to PERIODS_IN_ALSABUF
+     */
+    for (period =  bc->num_periods -  snd_pcm_avail(bc->play_hndl) / bc->period_frames;
+         period < PERIODS_IN_ALSABUF; period++) {
+
+      /* Give up if we're out of frames to send */
+      if (bc->play == bc->cap) {
+        break;
+      }
+
+      /* Write one period to playback */
+      if (write_playback_period(bc) != 0) {
+        bc->state = STOP;
+        goto done;
+      } 
+
+      /* advancing of playbck ptr depends on state */
+      if (diff <= HYSTERESIS) {
+        /* advance 1 for each frame played in PLAY mode */
+        bc->state = PLAY;
+        advance_play_ptr(bc);
+      } else if (actual_delta  < bc->target_delta_p) {
+        /* advance 1/2 for each frame played in BUFFER mode */
+        bc->state = BUFFER;
+        if (alternate) {
+          advance_play_ptr(bc);
+        }
+      } else {
+        /* advance 2 for each frame played in BUFFER mode */
+        bc->state = DOUBLE;
+        advance_play_ptr(bc);
         advance_play_ptr(bc);
       }
-    } else {
-      /* advance 2 for each frame played in BUFFER mode */
-      bc->state = DOUBLE;
-      advance_play_ptr(bc);
-      advance_play_ptr(bc);
+      alternate = !alternate;
     }
 
-    printf("STATE: %s  CAP: %d  PLAY: %d  DELTA: %d/%d\n",
+    printf("STATE: %s  CAP: %d  PLAY: %d  DELTA: %d/%d  ALSABUF: %ld/%d\n",
            STATE_NAME(bc->state),
-           bc->cap, bc->play, actual_delta,
-	   bc->target_delta_p);
+           bc->cap, bc->play, actual_delta, bc->target_delta_p,
+           bc->num_periods -  snd_pcm_avail(bc->play_hndl) / bc->period_frames,
+	   PERIODS_IN_ALSABUF);
   }
 
 done:
@@ -150,7 +152,7 @@ done:
  */
 int configure_stream(snd_pcm_t *handle, int format, unsigned int rate,
                      unsigned int *actual_rate, unsigned int *period_us,
-                     snd_pcm_uframes_t *period_bytes, unsigned int *num_periods) {
+                     snd_pcm_uframes_t *period_frames, unsigned int *num_periods) {
   int dir, err = -1;
   snd_pcm_hw_params_t *hw_params;
 
@@ -206,7 +208,7 @@ int configure_stream(snd_pcm_t *handle, int format, unsigned int rate,
   }
 
   snd_pcm_hw_params_get_period_time(hw_params, period_us, &dir);
-  snd_pcm_hw_params_get_period_size(hw_params, period_bytes, &dir);
+  snd_pcm_hw_params_get_period_size(hw_params, period_frames, &dir);
   snd_pcm_hw_params_get_periods(hw_params, num_periods, &dir);
 
 exit:

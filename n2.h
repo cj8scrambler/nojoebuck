@@ -16,9 +16,11 @@ typedef struct buffer_config {
   /* unprotected paramters (only set once) */
   snd_pcm_t *cap_hndl;
   snd_pcm_t *play_hndl;
-  unsigned int period_time;
   unsigned int num_periods;
+  unsigned int period_time;
+  unsigned int frame_bytes;
   snd_pcm_uframes_t period_bytes;
+  snd_pcm_uframes_t period_frames;
 
   /* Paramenters protected by lock */
   pthread_mutex_t lock;  
