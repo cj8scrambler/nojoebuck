@@ -31,22 +31,76 @@ static void advance_cap_ptr(buffer_config_t *bc) {
 }
 
 static int write_playback_period(buffer_config_t *bc) {
-  int err = snd_pcm_writei(bc->play_hndl, PLAY_PTR(bc), bc->period_frames);
+  int err;
+  int frameno, byteno;
+  uint8_t *audiodata = NULL;
+  uint8_t *buf = NULL;
+  int dataframes;
 
+  switch (bc->state){
+  case PLAY:
+    dataframes = bc->period_frames;
+    audiodata = PLAY_PTR(bc);
+    break;
+  case BUFFER:
+    dataframes = 2 * bc->period_frames;
+    buf = malloc(dataframes * bc->frame_bytes);
+    audiodata = buf;
+    if (!audiodata) {
+      fprintf(stderr, "%s() Memory error\n", __func__);
+      return -ENOMEM;
+    }
+    for (frameno = 0, byteno = 0; frameno < bc->period_frames; frameno++) {
+      /* copy each frame twice */
+      memcpy(&(audiodata[byteno]),
+             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
+             bc->frame_bytes);
+      byteno += bc->frame_bytes;
+      memcpy(&(audiodata[byteno]),
+             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
+             bc->frame_bytes);
+      byteno += bc->frame_bytes;
+    }
+    break;
+  case DOUBLE:
+    dataframes = bc->period_frames / 2;
+    buf = malloc(dataframes * bc->frame_bytes);
+    audiodata = buf;
+    if (!audiodata) {
+      fprintf(stderr, "%s() Memory error\n", __func__);
+      return -ENOMEM;
+    }
+    /* copy every other frame */
+    for (frameno = 0, byteno = 0; frameno < bc->period_frames; ) {
+      memcpy(&(audiodata[byteno]),
+             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
+             bc->frame_bytes);
+      frameno += 2;
+      byteno += bc->frame_bytes;
+    }
+    break;
+  default:
+    fprintf(stderr, "%s() Unkown state: %d\n", __func__, bc->state);
+    return -EINVAL;
+  }
+
+  err = snd_pcm_writei(bc->play_hndl, audiodata, dataframes);
   if (err == -EPIPE) {
     printf("Warning: playback buffer underrun.\n");
     snd_pcm_prepare(bc->play_hndl);
     err = 0;
   } else if (err < 0) {
     fprintf (stderr, "Write to audio interface failed (%s)\n", snd_strerror (err));
-    bc->state = STOP;
-  } else if (err != bc->period_frames) {
+  } else if (err != dataframes) {
     fprintf(stderr, "Warning: only wrote %d/%ld frames\n", err, bc->period_frames);
-    err = 0;
+    err = -1;
   } else {
     err = 0;
   }
 
+  if (buf) {
+    free(buf);
+  }
   return err;
 }
 
@@ -76,7 +130,6 @@ void *audio_io_thread(void *ptr) {
   buffer_config_t *bc = (buffer_config_t *)ptr;
   int last_state = STOP;
   struct timeval initial_time, now_time;
-  bool alternate = 0;
   int actual_delta;
   unsigned int diff, period;
 
@@ -90,8 +143,7 @@ void *audio_io_thread(void *ptr) {
     if ((err = snd_pcm_readi(bc->cap_hndl, CAPTURE_PTR(bc), bc->period_frames))
         != bc->period_frames) {
       fprintf (stderr, "Read from audio interface failed (%s)\n", snd_strerror (err));
-      bc->state = STOP;
-      goto done;
+      continue;
     }
 
     advance_cap_ptr(bc);
@@ -107,30 +159,22 @@ void *audio_io_thread(void *ptr) {
         break;
       }
 
-      /* Write one period to playback */
-      if (write_playback_period(bc) != 0) {
-        bc->state = STOP;
-        goto done;
-      } 
-
-      /* advancing of playbck ptr depends on state */
       if (diff <= HYSTERESIS) {
-        /* advance 1 for each frame played in PLAY mode */
         bc->state = PLAY;
-        advance_play_ptr(bc);
-      } else if (actual_delta  < bc->target_delta_p) {
-        /* advance 1/2 for each frame played in BUFFER mode */
+      } else if (actual_delta < bc->target_delta_p) {
         bc->state = BUFFER;
-        if (alternate) {
-          advance_play_ptr(bc);
-        }
       } else {
-        /* advance 2 for each frame played in BUFFER mode */
         bc->state = DOUBLE;
-        advance_play_ptr(bc);
-        advance_play_ptr(bc);
       }
-      alternate = !alternate;
+
+      /*
+       *  Write one period to playback interface either streched,
+       *  normal or compressed based on state
+       */
+      if (write_playback_period(bc) != 0) {
+        continue;
+      } 
+      advance_play_ptr(bc);
     }
 
     if ((last_state != bc->state) || bc->verbose) {
@@ -146,7 +190,6 @@ void *audio_io_thread(void *ptr) {
     last_state = bc->state;
   }
 
-done:
   return NULL;
 }
 

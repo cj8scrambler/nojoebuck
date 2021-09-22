@@ -104,7 +104,8 @@ def main(stdscr):
     global delay
     global buf
 
-    logging.basicConfig(filename='log',level=logging.ERROR)
+#    logging.basicConfig(filename='log',level=logging.ERROR)
+    logging.basicConfig(filename='log',level=logging.DEBUG)
 
     socket_cmd = zmq.Context().socket(zmq.PUSH)
     socket_cmd.connect (UI_CMD)
