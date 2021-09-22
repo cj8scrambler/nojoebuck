@@ -5,6 +5,7 @@
 #include "n2.h"
 #include "settings.h"
 #include "audio.h"
+#include "ui-server.h"
 
 /* Make sure both streams can be configured identically */
 int config_both_streams(settings_t *settings, buffer_config_t *bc) {
@@ -59,18 +60,18 @@ int config_both_streams(settings_t *settings, buffer_config_t *bc) {
   bc->period_time = cap_period_time;
   bc->period_frames = cap_period_frames;
   bc->period_bytes = cap_period_frames * (bc->frame_bytes);
-  bc->num_periods = cap_num_periods;
+  bc->alsa_num_periods = cap_num_periods;
 
   if (settings->verbose) {
     printf("Audio Parameters:\n");
-    printf("  Period (us):     %d\n", bc->period_time);
-    printf("  Period (frames): %ld\n", bc->period_frames);
-    printf("  Period (bytes):  %ld\n", bc->period_bytes);
-    printf("  Num Periods:     %d\n", bc->num_periods);
+    printf("  Period (us):      %d\n", bc->period_time);
+    printf("  Period (frames):  %ld\n", bc->period_frames);
+    printf("  Period (bytes):   %ld\n", bc->period_bytes);
+    printf("  ALSA Num Periods: %d\n", bc->alsa_num_periods);
     printf("  Calc ALSA Buffer (bytes):  %ld\n",
-           bc->num_periods * bc->period_bytes);
+           bc->alsa_num_periods * bc->period_bytes);
     printf("  Calc ALSA Buffer (ms):     %.1f\n",
-           (bc->num_periods * bc->period_time) / (1000.0));
+           (bc->alsa_num_periods * bc->period_time) / (1000.0));
   }
   pthread_mutex_unlock(&bc->lock);
 
@@ -81,7 +82,8 @@ int main(int argc, char *argv[]) {
 
   int ret;
 
-  pthread_t thread;
+  pthread_t audio_thread;
+  pthread_t ui_thread;
 
   buffer_config_t buffer_config = { 0 };
 
@@ -93,7 +95,7 @@ int main(int argc, char *argv[]) {
     .rate = 48000,
     .memory = 32*1024*1024,
     .verbose = 0,
-    .delay_ms = 2500,
+    .delay_ms = 5000,
   };
 
   settings_get_opts(&settings, argc, argv);
@@ -119,9 +121,11 @@ int main(int argc, char *argv[]) {
   }
 
   pthread_mutex_lock(&(buffer_config.lock));
+  buffer_config.max_delay_ms = ((settings.memory / buffer_config.period_bytes) * buffer_config.period_time) / 1000;
   buffer_config.state = BUFFER;
   buffer_config.target_delta_p = (settings.delay_ms * 1000) /  buffer_config.period_time;
   buffer_config.buffer = malloc(settings.memory);
+  buffer_config.mem_num_periods = settings.memory / buffer_config.period_bytes;
   pthread_mutex_unlock(&(buffer_config.lock));
 
   if (!buffer_config.buffer) {
@@ -129,15 +133,25 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  if(pthread_create(&thread, NULL, audio_io_thread, &buffer_config)) {
+  if(pthread_create(&audio_thread, NULL, audio_io_thread, &buffer_config)) {
     fprintf(stderr, "Could not create audio I/O thread\n");
     goto cleanup;
   }
 
+  if (ui_init(&buffer_config) < 0) {
+    goto cleanup;
+  }
+
+  if(pthread_create(&ui_thread, NULL, ui_server_thread, &buffer_config)) {
+    fprintf(stderr, "Could not create UI thread\n");
+    goto join_audio;
+  }
+
   if (settings.verbose) {
+    buffer_config.verbose = 1;
     printf("Buffer:\n");
     printf("  Size:         %d MB\n", settings.memory/1024/1024);
-    printf("  Num Periods:  %d\n", buffer_config.num_periods);
+    printf("  Num Periods:  %d\n", buffer_config.mem_num_periods);
     printf("  Target Delay: %d ms\n", settings.delay_ms);
     printf("  Target Delay: %d periods\n", buffer_config.target_delta_p);
     printf("  Max Delay:    %.1f seconds\n", (settings.memory / buffer_config.period_bytes) *
@@ -149,7 +163,11 @@ int main(int argc, char *argv[]) {
     pause();
   }
 
-  pthread_join(thread, NULL);
+  pthread_join(ui_thread, NULL);
+  ui_cleanup();
+
+join_audio:
+  pthread_join(audio_thread, NULL);
 
 cleanup:
   free(buffer_config.buffer);

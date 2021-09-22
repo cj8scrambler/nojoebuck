@@ -1,3 +1,6 @@
+#ifndef __SETTINGS_H
+#define __SETTINGS_H
+
 #define MAX_AUDIO_DEVNAME_LEN  64
 
 typedef struct settings {
@@ -12,3 +15,4 @@ typedef struct settings {
 } settings_t;
 
 void settings_get_opts(settings_t *settings, int argc, char *argv[]);
+#endif

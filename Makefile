@@ -6,7 +6,7 @@ all: nojoebuck info n2
 nojoebuck: main.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
-n2: n2.o settings.o audio.o
+n2: n2.o settings.o audio.o ui-server.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 info: info.o
