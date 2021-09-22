@@ -28,6 +28,7 @@ typedef struct buffer_config {
   snd_pcm_uframes_t period_bytes;  /* size of period in bytes */
   unsigned int frame_bytes;        /* size of frame in bytes */
   snd_pcm_uframes_t period_frames; /* number of frames in a period */
+  unsigned int min_delay_ms;       /* 5 ALSA periods */
   unsigned int max_delay_ms;       /* Max delay (based on app memory) */
 
   /* Paramenters protected by lock */

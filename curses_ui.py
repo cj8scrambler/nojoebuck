@@ -6,10 +6,9 @@ import time
 BUF_Y = 5
 UI_CMD = "ipc:///tmp/nojobuck_cmd"
 UI_STATUS = "ipc:///tmp/nojobuck_status"
-MAX_DELAY = 120000
 
-delay = 2500
-buf = 75
+delay = 0
+buf = 0
 last_redraw = 0.0
 
 def buf_progress(stdscr):
@@ -21,7 +20,7 @@ def buf_progress(stdscr):
     if ((w % 2) == 0):
         w -= 1
     # find the middle
-    m = curses.COLS / 2
+    m = int(curses.COLS / 2)
 
     left = int((buf / 100.0) * m)
     if (left > m):
@@ -90,12 +89,7 @@ def redraw(stdscr):
     global delay
     global last_redraw
 
-    # Don't run more than once every 100 ms
     now = time.time()
-    if ((buf != 100) and (now - last_redraw) < 0.100):
-        logging.debug('%.2f skip redraw' % (now))
-        return
-
     logging.debug('%.2f do redraw' % (now))
     last_redraw = now
 
@@ -115,64 +109,72 @@ def main(stdscr):
     socket_cmd = zmq.Context().socket(zmq.PUSH)
     socket_cmd.connect (UI_CMD)
 
-    socket_status = zmq.Context().socket(zmq.PULL)
+    socket_status = zmq.Context().socket(zmq.SUB)
     socket_status.connect (UI_STATUS)
-
-    # query the current delay
-    socket_cmd.send("D:");
-    cmd = socket_status.recv().split(':');
-    delay = int(cmd[1]);
-    logging.debug('got delay query response: %d' % (delay))
-    new_delay = delay
-
-    # query the current buffer
-    socket_cmd.send("B:");
-    cmd = socket_status.recv().split(':');
-    buf = int(cmd[1]);
-    logging.debug('got buffer query response: %d' % (buf))
+    socket_status.setsockopt_string(zmq.SUBSCRIBE, "") # subscribe to everything
 
     curses.curs_set(False)
     stdscr.nodelay(True)
     redraw(stdscr)
 
-    while True:
-        c = stdscr.getch()
-        if (c == ord('k')) or (c == curses.KEY_UP):
-            new_delay = delay + 10
-        if (c == ord('j')) or (c == curses.KEY_DOWN):
-            new_delay = delay - 10
-        if (c == curses.KEY_PPAGE) or (c == curses.KEY_RIGHT):
-            new_delay = delay + 500
-        if (c == curses.KEY_NPAGE) or (c == curses.KEY_LEFT):
-            new_delay = delay - 500
-        if c == ord('q'):
-            break  # Exit the while loop
+    new_delay = delay
+    new_buf = buf
 
-        if (new_delay < 0):
-            new_delay = 0
-        if (new_delay > MAX_DELAY):
-            new_delay = MAX_DELAY
-        if (new_delay != delay):
-            # send delay update message
-            delay = new_delay
-            logging.debug('Updated delay: %d' % (delay))
-            socket_cmd.send("D:%d" % (delay))
-            redraw(stdscr)
+    while True:
+        if (delay == 0):
+            logging.debug('Delay is 0; send DELAY query');
+            socket_cmd.send(b"D:");
+        if (buf == 0):
+            logging.debug('Buffer is 0; send BUFFER query');
+            socket_cmd.send(b"B:");
 
         message = ""
         try:
-            message = socket_status.recv(flags=zmq.NOBLOCK)
+            message = socket_status.recv(flags=zmq.NOBLOCK).decode()
         except zmq.ZMQError: 
             pass
-
         if (message != ""):
+            logging.debug('Received message: "%s"' % (message))
             stdscr.addstr(12, 2, "Received message: %s" % (message))
             stdscr.clrtoeol()
             cmd = message.split(':');
             if (cmd[0] == "B"):
                 new_buf = int(cmd[1])
                 if (new_buf != buf):
+                    logging.debug('Parsed as new buff: %d' % (new_buf))
                     buf = new_buf
                     redraw(stdscr)
+            if (cmd[0] == "D"):
+                new_delay = int(cmd[1])
+                if (new_delay != delay):
+                    logging.debug('Parsed as new delay: %d' % (new_delay))
+                    delay = new_delay
+                    redraw(stdscr)
+
+        new_delay = delay;
+
+        c = stdscr.getch()
+        if (c == ord('k')) or (c == curses.KEY_UP):
+            new_delay = delay + 10
+            logging.debug('key up; new_delay: %d' % (new_delay))
+        if (c == ord('j')) or (c == curses.KEY_DOWN):
+            new_delay = delay - 10
+            logging.debug('key down; new_delay: %d' % (new_delay))
+        if (c == curses.KEY_PPAGE) or (c == curses.KEY_RIGHT):
+            new_delay = delay + 500
+            logging.debug('key page up; new_delay: %d' % (new_delay))
+        if (c == curses.KEY_NPAGE) or (c == curses.KEY_LEFT):
+            new_delay = delay - 500
+            logging.debug('key page down; new_delay: %d' % (new_delay))
+        if c == ord('q'):
+            break  # Exit the while loop
+
+        if (new_delay < 0):
+            new_delay = 0
+        if (new_delay != delay):
+            logging.debug('Set new delay: %d' % (new_delay))
+            socket_cmd.send(b"D:%d" % (new_delay))
+
+        time.sleep(0.05)
 
 curses.wrapper(main)

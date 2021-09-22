@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/time.h>
-//#include <time.h>
 #include <alsa/asoundlib.h>
 
 #include "audio.h"
@@ -14,53 +13,24 @@
 #define CAPTURE_PTR(x) (((x)->buffer) + ((x)->cap * (x)->period_bytes))
 #define PLAY_PTR(x) (((x)->buffer) + ((x)->play * (x)->period_bytes))
 
-/* get actual delta in periods */
-unsigned int get_actual_delta(buffer_config_t *bc)
-{
-  /* number of periods in ALSA playback buffer */
-  unsigned int delta = bc->alsa_num_periods - snd_pcm_avail(bc->play_hndl) / bc->period_frames;
-  if (!bc) {
-    fprintf(stderr, "%s(): Invalid call\n", __func__);  
-    return 0;
-  }
-
-  pthread_mutex_lock(&bc->lock);
-
-  if (bc->cap >= bc->play) {
-    delta +=  bc->cap - bc->play;
-  } else {
-    delta += (bc->mem_num_periods - bc->play) + bc->cap;
-  }
-  pthread_mutex_unlock(&bc->lock);
-
-  return delta;
-}
-
-void advance_ptr(buffer_config_t *bc, unsigned int *ptr) {
+static void advance_ptr(buffer_config_t *bc, unsigned int *ptr) {
   if (!bc || !ptr)
     return;
 
   if (++(*ptr) == bc->mem_num_periods) {
     *ptr = 0;
   }
-
-//  if (bc->cap == bc->play) {
-//    if (++(bc->play) == bc->mem_num_periods) {
-//      bc->play = 0;
-//    }
-//    fprintf(stderr, "Warning: buffer overflow!\n");
-//  }
 }
 
-void advance_play_ptr(buffer_config_t *bc) {
+static void advance_play_ptr(buffer_config_t *bc) {
   advance_ptr(bc, &(bc->play));
 }
 
-void advance_cap_ptr(buffer_config_t *bc) {
+static void advance_cap_ptr(buffer_config_t *bc) {
   return advance_ptr(bc, &(bc->cap));
 }
 
-int write_playback_period(buffer_config_t *bc) {
+static int write_playback_period(buffer_config_t *bc) {
   int err = snd_pcm_writei(bc->play_hndl, PLAY_PTR(bc), bc->period_frames);
 
   if (err == -EPIPE) {
@@ -80,6 +50,27 @@ int write_playback_period(buffer_config_t *bc) {
   return err;
 }
 
+/* get actual delta in periods */
+unsigned int get_actual_delta(buffer_config_t *bc)
+{
+  /* number of periods in ALSA playback buffer */
+  unsigned int delta = bc->alsa_num_periods - snd_pcm_avail(bc->play_hndl) / bc->period_frames;
+  if (!bc) {
+    fprintf(stderr, "%s(): Invalid call\n", __func__);  
+    return 0;
+  }
+
+  pthread_mutex_lock(&bc->lock);
+  if (bc->cap >= bc->play) {
+    delta +=  bc->cap - bc->play;
+  } else {
+    delta += (bc->mem_num_periods - bc->play) + bc->cap;
+  }
+  pthread_mutex_unlock(&bc->lock);
+
+  return delta;
+}
+
 void *audio_io_thread(void *ptr) {
   int err;
   buffer_config_t *bc = (buffer_config_t *)ptr;
@@ -95,7 +86,7 @@ void *audio_io_thread(void *ptr) {
     actual_delta = get_actual_delta(bc);
     diff = abs(actual_delta - bc->target_delta_p);
 
-    /* Blocking read from capture interface (provies throttle to while loop */
+    /* Blocking read from capture interface (provies throttle to while loop) */
     if ((err = snd_pcm_readi(bc->cap_hndl, CAPTURE_PTR(bc), bc->period_frames))
         != bc->period_frames) {
       fprintf (stderr, "Read from audio interface failed (%s)\n", snd_strerror (err));
@@ -142,8 +133,7 @@ void *audio_io_thread(void *ptr) {
       alternate = !alternate;
     }
 
-//    if ((last_state != bc->state) || bc->verbose) {
-    if ((last_state != bc->state)) {
+    if ((last_state != bc->state) || bc->verbose) {
       long delta_us;
       gettimeofday(&now_time, NULL);
       delta_us = (now_time.tv_sec - initial_time.tv_sec) * 1000000 +
@@ -160,10 +150,6 @@ done:
   return NULL;
 }
 
-
-/*
- * return 0 on success; negative on error
- */
 int configure_stream(snd_pcm_t *handle, int format, unsigned int rate,
                      unsigned int *actual_rate, unsigned int *period_us,
                      snd_pcm_uframes_t *period_frames, unsigned int *alsa_num_periods) {

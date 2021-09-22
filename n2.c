@@ -121,6 +121,7 @@ int main(int argc, char *argv[]) {
   }
 
   pthread_mutex_lock(&(buffer_config.lock));
+  buffer_config.min_delay_ms = (5 * buffer_config.period_time) / 1000;
   buffer_config.max_delay_ms = ((settings.memory / buffer_config.period_bytes) * buffer_config.period_time) / 1000;
   buffer_config.state = BUFFER;
   buffer_config.target_delta_p = (settings.delay_ms * 1000) /  buffer_config.period_time;
