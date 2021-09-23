@@ -5,20 +5,6 @@ hardware.  It allows you to add delay to an audio source such as a radio
 broadcast of a sporting event.  This makes it possible to sync the audio
 from a radio broadcast to a streamed video of the same broadcast.
 
-## Background
-
-In the fall of 2016 the Cubs were making a strong run through the playoffs.
-Since it was post-seaons, the games were no longer handled by the local
-broadcasters who knew the team and provided insightful commentary.  Instead
-the games were on national broadcast where the commentators had nothing useful
-to say.
-
-In the old days, you could simply turn off the TV sound and turn on the radio
-broadcast to solve this.  However now with streaming video, the delay between
-radio and video is too great.  This is where nojoebuck comes in.  Put it inline
-with the radio audio source and you can tune the delay to get it to match the
-streaming video source.
-
 ## Hardware
 
 This can run on any Linux platform, but the Raspberry Pi Zero was the intended
@@ -65,6 +51,20 @@ available on your system run: aplay -L
 available on your system run: arecord -L
 #CAPTURE="default"
 ```
+
+## Background
+
+In the fall of 2016 the Cubs were making a strong run through the playoffs.
+Since it was post-seaons, the games were no longer handled by the local
+broadcasters who knew the team and provided insightful commentary.  Instead
+the games were on national broadcast where the commentators had nothing useful
+to say.
+
+In the old days, you could simply turn off the TV sound and turn on the radio
+broadcast to solve this.  However now with streaming video, the delay between
+radio and video is too great.  This is where nojoebuck comes in.  Put it inline
+with the radio audio source and you can tune the delay to get it to match the
+streaming video source.
 
 ## Todo
   * Use a radio tuner (or maybe SDR) as the audio source

@@ -11,12 +11,16 @@ int get_buf_pct(buffer_config_t *bc) {
 
   int buf_pct = 0;
   if (bc) {
-    buf_pct = (int)((get_actual_delta(bc) * 100) /
+    buf_pct = (int)((get_actual_delta(bc) * 100.0) /
                     bc->target_delta_p + 0.5);
   }
 
+  /* Clip at 200 % */
   if (buf_pct > 200) {
     buf_pct = 200;
+  /* Round 99/101 off to 100 to stabalize the UI */
+  } else if (buf_pct >= 99 && buf_pct <= 101) {
+    buf_pct = 100;
   }
 
   return buf_pct;

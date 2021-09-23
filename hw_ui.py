@@ -7,20 +7,17 @@ from RPi import GPIO
 
 UI_CMD = "ipc:///tmp/nojobuck_cmd"
 UI_STATUS = "ipc:///tmp/nojobuck_status"
-MAX_DELAY = 120000
+
 REDRAW_PERIOD = 0.20      # seconds between redraws
-DELAY_MODE_TIMEOUT = 1.5  # seconds to leave delay screen up
+DELAY_MODE_TIMEOUT = 1.5  # seconds to leave delay_setting screen up
+
+# Rotary encoder pins
 CLK_PIN = 17
-DT_PIN = 18
+DT_PIN = 27
 
-delay = -1
-buf = -1
-draw_state = 0
-last_redraw = 0.0
+def show_buf(buf):
 
-def show_buf():
-    global buf
-
+    logging.debug('show_buf():');
     microdotphat.clear()
     if (buf == 100):
         microdotphat.write_string('PLAY', offset_x = 8, kerning=False)
@@ -41,121 +38,95 @@ def show_buf():
 
     microdotphat.show()
 
-def show_delay():
-    global delay
+def show_delay_setting(delay):
 
+    logging.debug('show_delay():');
     microdotphat.clear()
-    microdotphat.write_string('%.2f' % (delay / 1000.0), kerning=False)
-    logging.debug('  delay: %.2f' % (delay / 1000.0))
+    microdotphat.write_string('%.2f' % (delay/ 1000.0), kerning=False)
+    logging.debug('  delay_setting: %.2f' % (delay/ 1000.0))
     microdotphat.show()
 
-def redraw():
-    global delay
-    global draw_state
-    global last_redraw
-
-    now = time.time()
-    if ((buf != 100) and ((now - last_redraw) < REDRAW_PERIOD)):
-        return
-
-    last_redraw = now
-
-    if (draw_state == 0):
-        show_buf()
-    else:
-        show_delay()
-
-def buf_mode():
-    global draw_state
-    draw_state = 0
-
 def main():
-    global delay
-    global buf
+    server_delay = -1 # last delay value sent/recieved from UI server
+    server_buf = -1  # last buf value sent/recieved from UI server
+    drawn_delay = -1 # last delay value drawn (higher priority than sent_delay)
+    drawn_buf = -1  # last buf value drawn
 
     logging.basicConfig(level=logging.ERROR,
-                        format='%(asctime)s %(levelname)s %(message)s',
-                        filename='hw_ui.log',
-                        filemode='w')
+                        format='%(asctime)s %(levelname)s %(message)s')
     logging.debug("Starting up")
 
-    timer=threading.Timer(DELAY_MODE_TIMEOUT, buf_mode)
- 
     # Setup rotary encoder inputs
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(CLK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(DT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     clkLastState = GPIO.input(CLK_PIN)
 
+    socket_status = zmq.Context().socket(zmq.SUB)
+    socket_status.connect (UI_STATUS)
+    socket_status.setsockopt_string(zmq.SUBSCRIBE, "") # subscribe to everything
+
     socket_cmd = zmq.Context().socket(zmq.PUSH)
     socket_cmd.connect (UI_CMD)
-    socket_status = zmq.Context().socket(zmq.PULL)
-    socket_status.connect (UI_STATUS)
 
-    # There might be a bunch of other messages coming in so wait for the right one
-    while (delay == -1):
-        socket_cmd.send("D:");
+    # query the current delay/buf before starting
+    while (server_delay == -1 or server_buf == -1):
+        logging.debug("Query delay & buf")
+        socket_cmd.send(b"D:");
+        socket_cmd.send(b"B:");
+
         cmd = ['','']
         try:
-            cmd = socket_status.recv(flags=zmq.NOBLOCK).split(':')
+            cmd = socket_status.recv(flags=zmq.NOBLOCK).decode().split(':')
         except zmq.ZMQError: 
             pass
         if (cmd[0] == "D"):
-            delay = int(cmd[1]);
-            logging.debug('got delay query response: %d' % (delay))
-            new_delay = delay
-        else:
-            logging.debug('BAD delay response: %s ' % (cmd))
-
-    while (buf == -1):
-        socket_cmd.send("B:");
-        cmd = ['','']
-        try:
-            cmd = socket_status.recv(flags=zmq.NOBLOCK).split(':')
-        except zmq.ZMQError: 
-            pass
-        if (cmd[0] == "B"):
-            buf = int(cmd[1]);
-            logging.debug('got buffer query response: %d' % (buf))
-        else:
-            logging.debug('BAD buffer response: %s ' % (cmd))
+            server_delay = int(cmd[1]);
+            logging.debug('got delay_setting query response: %d' % (server_delay))
+        elif (cmd[0] == "B"):
+            server_buf = int(cmd[1]);
+            logging.debug('got buffer query response: %d' % (server_buf))
         time.sleep(0.01)
 
-    redraw();
+    last_drawn_buf_time = time.time()
+    show_delay_setting(server_delay)
+    drawn_delay = server_delay
 
     while True:
         shouldSleep = True
+
+        # Look for encoder input
         clkState = GPIO.input(CLK_PIN)
         dtState = GPIO.input(DT_PIN)
+        new_delay_setting = drawn_delay
         if clkState != clkLastState:
             if dtState != clkState:
-                new_delay = delay + 10
+                new_delay_setting = drawn_delay + 10
             else:
-                new_delay = delay - 10
+                new_delay_setting = drawn_delay - 10
             clkLastState = clkState
-            logging.debug('got rotation: %d -> %d\n' % (delay, new_delay));
+            logging.debug('got rotation: %d -> %d\n' % (drawn_delay, new_delay_setting));
 
-            if (new_delay < 0):
-                new_delay = 0
-            if (new_delay > MAX_DELAY):
-                new_delay = MAX_DELAY
-            draw_state=1
-            redraw()
-            timer.cancel()
-            timer.start() #switch back to draw_state=0 later
+            if (new_delay_setting < 0):
+                new_delay_setting = 0
+            if (new_delay_setting > MAX_DELAY):
+                new_delay_setting = MAX_DELAY
 
-        # Send message when we're not getting rotations
-        else:
-            if (new_delay != delay):
-                delay = new_delay
-                logging.debug('Updated delay: %d' % (delay))
-                socket_cmd.send("D:%d" % (delay))
-                redraw()
-                shouldSleep = False
+            last_drawn_buf_time = time.time()
+            show_delay_setting(new_delay_setting)
+            drawn_delay = new_delay_setting
+            shouldSleep = False
+
+        # Only send message when we're not getting rotations
+        elif (new_delay_setting != server_delay):
+            logging.debug('Sending delay update: %d' % (new_delay_setting))
+            socket_cmd.send(b"D:%d" % (new_delay_setting))
+            server_delay = new_delay_setting
+            shouldSleep = False
 
         message = ""
         try:
-            message = socket_status.recv(flags=zmq.NOBLOCK)
+            message = socket_status.recv(flags=zmq.NOBLOCK).decode()
         except zmq.ZMQError: 
             pass
 
@@ -163,11 +134,24 @@ def main():
             shouldSleep = False
             cmd = message.split(':');
             if (cmd[0] == "B"):
-                new_buf = int(cmd[1])
-                if (new_buf != buf):
-                    buf = new_buf
-                    redraw()
+                server_buf = int(cmd[1])
+                logging.debug('Received new server buf: %d' % (server_buf))
+            elif (cmd[0] == "D"):
+                server_delay = int(cmd[1])
+                logging.debug('Received new server delay: %d' % (server_delay))
 
+        now = time.time()
+        if (drawn_delay != server_delay):
+            logging.debug('Drawing delay because new value found')
+            last_drawn_buf_time = time.time()
+            show_delay_setting(server_delay)
+            drawn_delay = server_delay
+        elif (now - last_drawn_buf_time > DELAY_MODE_TIMEOUT):
+            if (abs(server_buf - drawn_buf) > 0):
+                logging.debug('Drawing buf because timeout')
+                show_buf(server_buf)
+                drawn_buf = server_buf
+            
         if (shouldSleep):
             time.sleep(0.01)
 
