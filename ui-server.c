@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <zmq.h>
 
-#include "n2.h"
+#include "nojoebuck.h"
 #include "audio.h"
 
 /*
@@ -20,8 +20,9 @@
  *             An asynchronus update may arrive before a command response.
  *             The clients must SUBscribe to the messages they want to
  *             receive with zmq_setsockopt():
- *               "D" - Delay status
  *               "B" - Buffer status
+ *               "C" - Current delay status
+ *               "D" - Delay setting status
  *               ""  - All status
  *
  * ASCII string message format: "[char]:[value]"
@@ -53,7 +54,7 @@ static void *zmq_context_cmd = NULL;
 static void *ui_status = NULL;
 static void *zmq_context_status = NULL;
 
-void static update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
+static void update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
 
   if (!bc) {
     fprintf(stderr, "%s() invalid call\n", __func__);

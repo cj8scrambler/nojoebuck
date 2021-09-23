@@ -1,8 +1,7 @@
-/* Use the newer ALSA API */
 #include <stdio.h>
 #include <alsa/asoundlib.h>
 
-#include "n2.h"
+#include "nojoebuck.h"
 #include "settings.h"
 #include "audio.h"
 #include "ui-server.h"
@@ -139,7 +138,7 @@ int main(int argc, char *argv[]) {
   pthread_mutex_lock(&(buffer_config.lock));
   buffer_config.min_delay_ms = (5 * buffer_config.period_time) / 1000;
   buffer_config.max_delay_ms = ((settings.memory / buffer_config.period_bytes) * buffer_config.period_time) / 1000;
-  buffer_config.state = BUFFER_2_4;
+  buffer_config.state = BUFFER_4_8;
   buffer_config.target_delta_p = (settings.delay_ms * 1000) /  buffer_config.period_time;
   buffer_config.buffer = malloc(settings.memory);
   buffer_config.mem_num_periods = settings.memory / buffer_config.period_bytes;
@@ -170,13 +169,15 @@ int main(int argc, char *argv[]) {
     printf("  Size:         %d MB\n", settings.memory/1024/1024);
     printf("  Num Periods:  %d\n", buffer_config.mem_num_periods);
     printf("  Target Delay: %d ms\n", settings.delay_ms);
-    printf("  Target Delay: %d periods\n", buffer_config.target_delta_p);
-    printf("  Max Delay:    %.1f seconds\n", (settings.memory / buffer_config.period_bytes) *
-                                             (buffer_config.period_time / 1000000.0));
+    printf("  Target Delay: %d periods\n  ", buffer_config.target_delta_p);
   }
+
+  printf("Max Delay:    %.1f seconds\n", (settings.memory / buffer_config.period_bytes) *
+                                         (buffer_config.period_time / 1000000.0));
 
   while (buffer_config.state)
   {
+    /* nothing left to do here */
     pause();
   }
 
@@ -188,4 +189,4 @@ join_audio:
 
 cleanup:
   free(buffer_config.buffer);
-} 
+}

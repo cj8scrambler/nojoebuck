@@ -1,8 +1,9 @@
 # nojoebuck
 
 nojoebuck is an audio buffering program intended for use on Raspberry Pi
-hardware.  It allows you to add delay to an audio such as a radio
-broadcast of a sporting event which Joe Buck is calling on TV.
+hardware.  It allows you to add delay to an audio source such as a radio
+broadcast of a sporting event.  This makes it possible to sync the audio
+from a radio broadcast to a streamed video of the same broadcast.
 
 ## Background
 
@@ -14,9 +15,9 @@ to say.
 
 In the old days, you could simply turn off the TV sound and turn on the radio
 broadcast to solve this.  However now with streaming video, the delay between
-radio and TV is too great.  This is where nojoebuck comes in.  Put it inline
-with the audio source and you can tune the audio delay to get it to match
-with the streaming video source.
+radio and video is too great.  This is where nojoebuck comes in.  Put it inline
+with the radio audio source and you can tune the delay to get it to match the
+streaming video source.
 
 ## Hardware
 
@@ -33,7 +34,7 @@ platform.  Here are the basics:
 ## Setup
 
 The easiest way to setup is to clone the github repo onto the machine, build and install:
-  1. Install dependencies:  `sudo apt-get install build-essential git python3-microdotphat python3-zmq libzmq3-dev`
+  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils python3-microdotphat python3-zmq libzmq3-dev`
   1. Clone the repository: `git clone https://github.com/cj8scrambler/nojoebuck.git`
   1. Build: `cd nojoebuck; make`
   1. Install: `sudo make install`
@@ -42,13 +43,30 @@ The easiest way to setup is to clone the github repo onto the machine, build and
 
 ## Usage
 
-nojoebuck can be started as a systemd service.
+nojoebuck can be started as a systemd service.  Options can be configured in
+`/etc/default/nojoebuck`.  The default values are listed there.
+```
+# Bit depth to capture at
+#BITS=16 
 
-nojoebuck [options]...
-  -b, --bits=[16|24|32]  Bit depth.  Default: 16
-  -c, --capture=NAME     Name of capture interface (list with aplay -L).  Default: default
-  -h, --help             This usage message
-  -m, --memory=SIZE      Memory buffer to reserve in MB.  Default: 32.0
-  -p, --playback=NAME    Name of playback interface (list with aplay -L).  Default: default
-  -r, --rate=RATE        Sample rate.  Default: 48000
+# Sampling Rate
+#RATE=48000 
 
+# MB of Memory to reserve for buffer.  The determines the maximum delay
+# possible.  With the default sampling depth/rate, the default of 32MB
+# allows for up to 174.8 seconds of delay
+#MEMORY=32 
+
+# ALSA compatible playback interface name.  To see which interfaces are
+available on your system run: aplay -L
+#CAPTURE="default"
+
+# ALSA compatible capture interface name.  To see which interfaces are
+available on your system run: arecord -L
+#CAPTURE="default"
+```
+
+## Todo
+  * Use a radio tuner (or maybe SDR) as the audio source
+  * Verify mixer settings at runtime
+  * Move from discrete stretching steps to continuous

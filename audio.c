@@ -5,10 +5,9 @@
 #include <sys/time.h>
 #include <alsa/asoundlib.h>
 
+#include "nojoebuck.h"
 #include "audio.h"
-#include "n2.h"
 
-//#define HYSTERESIS  1  /* number of periods still considered in sync */
 #define HYSTERESIS  11  /* number of ms still considered in sync */
 #define PERIODS_IN_ALSABUF  10  /* Number of periods to keep in the ALSA buffer */
 #define CAPTURE_PTR(x) (((x)->buffer) + ((x)->cap * (x)->period_bytes))
@@ -42,8 +41,8 @@ static int write_playback_period(buffer_config_t *bc) {
 
   /*
    *  bc->state enums map to playback rates where PLAY is the denominator i.e.:
-   *    BUFFER_1_8 / PLAY = 0.125  (playback at 12.5% speed)
-   *    PURGE_32_8 / PLAY = 4      (playback at 400% speed)
+   *    BUFFER_1_8 / PLAY = 0.125  (playback at 12.5 % speed)
+   *    PURGE_16_8 / PLAY = 2      (playback at 200 % speed)
    */
   float playback_rate = ((float) bc->state) / PLAY;
 
@@ -72,13 +71,12 @@ static int write_playback_period(buffer_config_t *bc) {
       return -ENOMEM;
     }
 
-    /* src frame is accumulated as a float, but cast to int when used as offset */
+    /* src_frame is accumulated as a float, but cast to int when used as offset */
     for (src_frame = 0.0, dst_frame = 0; src_frame < bc->period_frames;) {
       target_frame += frame_dup;
       while (dst_frame < (int) target_frame) {
         //printf("  source frame %d (%.3f) -> dst frame %d  [target: %.3f]\n",
         //       (int)src_frame, src_frame, dst_frame, target_frame);
-        /* copy each frame twice */
         memcpy(&(audiodata[dst_frame * bc->frame_bytes]),
                PLAY_PTR(bc) + (((int)src_frame) * bc->frame_bytes),
                bc->frame_bytes);
@@ -161,7 +159,8 @@ void *audio_io_thread(void *ptr) {
  
       /* Give up if we're out of frames to send */
       if (bc->play == bc->cap) {
-printf("Abort writes at %d/%d because out of frames\n", period, PERIODS_IN_ALSABUF);
+        fprintf(stderr, "Abort writes at %d/%d because out of frames\n",
+                period, PERIODS_IN_ALSABUF);
         break;
       }
 

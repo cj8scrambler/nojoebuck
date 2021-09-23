@@ -1,6 +1,6 @@
 #ifndef __AUDIO_H
 #define __AUDIO_H
-#include "n2.h"
+#include "nojoebuck.h"
 
 int configure_stream(snd_pcm_t *handle, int format, unsigned int rate,
                      unsigned int *actual_rate, unsigned int *period_us,
