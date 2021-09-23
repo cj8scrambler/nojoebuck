@@ -28,12 +28,14 @@
  *
  * Command       Client->Server (PUSH->PULL)   Server->Client (PUB->SUB)
  * -------       ---------------------------   -------------------------
- * "D:1540"      set delay to 1.54 seconds     report current delay of 1.54 seconds
- * "D:"          request current delay         N/A
+ * "D:1540"      set delay to 1.54 seconds     report delay setting of 1.54 seconds
+ * "D:"          request delay setting         N/A
  * "B:100"       N/A                           Buffer full (playing normal with delay)
- * "B:[0-99]"    N/A                           Buffer filling (playing at 1/2 speed to fill buffer)
- * "B:[101-199]" N/A                           Buffer emptying (playing at 2x speed to empty buffer)
+ * "B:[0-99]"    N/A                           Buffer filling (playing at slower speed to fill buffer)
+ * "B:[101-199]" N/A                           Buffer emptying (playing at faster speed to empty buffer)
  * "B:"          request current buffer status 
+ * "C:983"       N/A                           Current delay is 983 ms
+ * "C:"          request current delay 
  */
 
 /*
@@ -51,7 +53,7 @@ static void *zmq_context_cmd = NULL;
 static void *ui_status = NULL;
 static void *zmq_context_status = NULL;
 
-void static update_delay(buffer_config_t *bc, unsigned int delay_ms) {
+void static update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
 
   if (!bc) {
     fprintf(stderr, "%s() invalid call\n", __func__);
@@ -73,26 +75,10 @@ void static update_delay(buffer_config_t *bc, unsigned int delay_ms) {
   pthread_mutex_unlock(&bc->lock);
 
   if (bc->verbose) {
-    printf ("Updated delay to %.1f sec (%d periods)\n",
+    printf ("Updated delay setting to %.1f sec (%d periods)\n",
             (bc->target_delta_p * bc->period_time) / 1000000.0,
             bc->target_delta_p);
   }
-}
-
-/* return negative on error, buffer percentage (0-200) on success */
-static int ui_get_buf_pct(buffer_config_t *bc) {
-
-  int buf_pct = 0;
-  if (bc) {
-    buf_pct = (int)((get_actual_delta(bc) * 100) /
-                    bc->target_delta_p + 0.5);
-  }
-
-  if (buf_pct > 200) {
-    buf_pct = 200;
-  }
-
-  return buf_pct;
 }
 
 /* return negative on error, buffer value on success */
@@ -104,7 +90,7 @@ static int ui_send_buf(buffer_config_t *bc) {
   if (!bc)
     return -1;
 
-  buf_pct = ui_get_buf_pct(bc);
+  buf_pct = get_buf_pct(bc);
   snprintf(buffer, MAX_UI_CMD, "B:%d", buf_pct);
   if (bc->verbose) {
     printf("UI BUFFER: %d (%s)\n", buf_pct, buffer);
@@ -118,7 +104,7 @@ static int ui_send_buf(buffer_config_t *bc) {
   return buf_pct;
 }
 
-static int ui_send_delay(buffer_config_t *bc) {
+static int ui_send_delay_setting(buffer_config_t *bc) {
 
   char buffer[MAX_UI_CMD+1];
   unsigned int delay;
@@ -131,7 +117,31 @@ static int ui_send_delay(buffer_config_t *bc) {
   snprintf(buffer, MAX_UI_CMD, "D:%d", delay);
 
   if (bc->verbose) {
-    printf("UI DELAY: %d (%s)\n", delay, buffer);
+    printf("UI DELAY SETTING: %d (%s)\n", delay, buffer);
+  }
+  
+  if (strlen(buffer) != zmq_send (ui_status, buffer,
+                                  strlen(buffer), 0)) {
+    fprintf(stderr, "Error sending zmq msg [%s]: %s\n",
+            buffer, strerror(errno));
+  }
+
+  return delay;
+}
+
+static int ui_send_current_delay(buffer_config_t *bc) {
+
+  char buffer[MAX_UI_CMD+1];
+  unsigned int delay;
+
+  if (!bc)
+  return -1;
+
+  delay = (get_actual_delta(bc) * bc->period_time) / 1000;
+  snprintf(buffer, MAX_UI_CMD, "C:%d", delay);
+
+  if (bc->verbose) {
+    printf("UI CURRENT DELAY: %d (%s)\n", delay, buffer);
   }
   
   if (strlen(buffer) != zmq_send (ui_status, buffer,
@@ -196,12 +206,12 @@ int ui_cleanup(void) {
   return 0;
 }
 
-
 void *ui_server_thread(void *data) {
   buffer_config_t *bc = (buffer_config_t *)data;
   int ret;
   char buffer[MAX_UI_CMD+1];
-  unsigned int last_delay = 0, last_buf = 0; /* last reported values */
+  unsigned int current_delay;
+  unsigned int last_delay_setting = 0, last_buf = 0, last_current_delay=0;
 
   while (bc->state) {
     ret = zmq_recv (ui_cmd, buffer, MAX_UI_CMD, ZMQ_DONTWAIT);
@@ -218,11 +228,11 @@ void *ui_server_thread(void *data) {
       if (token && !strcmp(token, "D")) {
         token = strtok(NULL, ":");
         if (token) {
-          update_delay(bc, strtol(token, NULL, 10));
+          update_delay_setting(bc, strtol(token, NULL, 10));
         } else {
-          ret = ui_send_delay(bc);
+          ret = ui_send_delay_setting(bc);
           if (ret > 0) {
-            last_delay = ret;
+            last_delay_setting = ret;
           }
         }
       } else if (token && !strcmp(token, "B")) {
@@ -230,24 +240,38 @@ void *ui_server_thread(void *data) {
         if (ret > 0) {
           last_buf = ret;
         }
+      } else if (token && !strcmp(token, "C")) {
+        ret = ui_send_current_delay(bc);
+        if (ret > 0) {
+          last_current_delay = ret;
+        }
       } else {
           fprintf(stderr, "Received invalid UI command: %s\n", buffer);
       }
     }
 
-    /* check for changes in delay since last report */
-    if (last_delay != (bc->target_delta_p * bc->period_time) / 1000) {
-      ret = ui_send_delay(bc);
+    /* check for changes in delay seting since last report */
+    if (last_delay_setting != (bc->target_delta_p * bc->period_time) / 1000) {
+      ret = ui_send_delay_setting(bc);
       if (ret > 0) {
-        last_delay = ret;
+        last_delay_setting = ret;
       }
     }
 
     /* check for changes in buff since last report */
-    if (abs(last_buf - ui_get_buf_pct(bc)) > 1) {
+    if (abs(last_buf - get_buf_pct(bc)) > 1) {
       ret = ui_send_buf(bc);
       if (ret > 0) {
         last_buf = ret;
+      }
+    }
+
+    current_delay = (get_actual_delta(bc) * bc->period_time) / 1000;
+    /* check for changes in current delay since report */
+    if (abs(current_delay - last_current_delay) > 11) {
+      ret = ui_send_current_delay(bc);
+      if (ret > 0) {
+        last_current_delay = ret;
       }
     }
 

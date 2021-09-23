@@ -7,6 +7,22 @@
 #include "audio.h"
 #include "ui-server.h"
 
+/* buffer percentage (0-200) */
+int get_buf_pct(buffer_config_t *bc) {
+
+  int buf_pct = 0;
+  if (bc) {
+    buf_pct = (int)((get_actual_delta(bc) * 100) /
+                    bc->target_delta_p + 0.5);
+  }
+
+  if (buf_pct > 200) {
+    buf_pct = 200;
+  }
+
+  return buf_pct;
+}
+
 /* Make sure both streams can be configured identically */
 int config_both_streams(settings_t *settings, buffer_config_t *bc) {
 
@@ -123,7 +139,7 @@ int main(int argc, char *argv[]) {
   pthread_mutex_lock(&(buffer_config.lock));
   buffer_config.min_delay_ms = (5 * buffer_config.period_time) / 1000;
   buffer_config.max_delay_ms = ((settings.memory / buffer_config.period_bytes) * buffer_config.period_time) / 1000;
-  buffer_config.state = BUFFER;
+  buffer_config.state = BUFFER_2_4;
   buffer_config.target_delta_p = (settings.delay_ms * 1000) /  buffer_config.period_time;
   buffer_config.buffer = malloc(settings.memory);
   buffer_config.mem_num_periods = settings.memory / buffer_config.period_bytes;

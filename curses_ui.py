@@ -7,7 +7,8 @@ BUF_Y = 5
 UI_CMD = "ipc:///tmp/nojobuck_cmd"
 UI_STATUS = "ipc:///tmp/nojobuck_status"
 
-delay = 0
+current_delay = 0
+delay_setting = 0
 buf = 0
 last_redraw = 0.0
 
@@ -86,7 +87,8 @@ def buf_progress(stdscr):
 
 
 def redraw(stdscr):
-    global delay
+    global current_delay
+    global delay_setting
     global last_redraw
 
     now = time.time()
@@ -95,13 +97,17 @@ def redraw(stdscr):
 
     #stdscr.clear()
     height, width = stdscr.getmaxyx()
-    stdscr.addstr(2, 2, "Delay: %.2f" % (delay/1000.0), curses.A_REVERSE)
+    stdscr.addstr(2, 2, "Delay Setting: %.2f" % (delay_setting/1000.0), curses.A_REVERSE)
+    stdscr.clrtoeol()
+    stdscr.addstr(2, curses.COLS - 21,
+                  "Current Delay: %.2f" % (current_delay/1000.0), curses.A_REVERSE)
     stdscr.clrtoeol()
     buf_progress(stdscr);
     stdscr.refresh()
 
 def main(stdscr):
-    global delay
+    global current_delay
+    global delay_setting
     global buf
 
 #    logging.basicConfig(filename='log',level=logging.ERROR)
@@ -118,12 +124,16 @@ def main(stdscr):
     stdscr.nodelay(True)
     redraw(stdscr)
 
-    new_delay = delay
+    new_current_delay = current_delay
+    new_delay_setting = delay_setting
     new_buf = buf
 
     while True:
-        if (delay == 0):
-            logging.debug('Delay is 0; send DELAY query');
+        if (current_delay == 0):
+            logging.debug('Current delay is 0; send CURRENT DELAY query');
+            socket_cmd.send(b"C:");
+        if (delay_setting == 0):
+            logging.debug('Delay setting is 0; send DELAY SETTING query');
             socket_cmd.send(b"D:");
         if (buf == 0):
             logging.debug('Buffer is 0; send BUFFER query');
@@ -146,36 +156,42 @@ def main(stdscr):
                     buf = new_buf
                     redraw(stdscr)
             if (cmd[0] == "D"):
-                new_delay = int(cmd[1])
-                if (new_delay != delay):
-                    logging.debug('Parsed as new delay: %d' % (new_delay))
-                    delay = new_delay
+                new_delay_setting = int(cmd[1])
+                if (new_delay_setting != delay_setting):
+                    logging.debug('Parsed as new delay setting: %d' % (new_delay_setting))
+                    delay_setting = new_delay_setting
+                    redraw(stdscr)
+            if (cmd[0] == "C"):
+                new_current_delay = int(cmd[1])
+                if (new_current_delay != current_delay):
+                    logging.debug('Parsed as new current delay: %d' % (new_current_delay))
+                    current_delay = new_current_delay
                     redraw(stdscr)
 
-        new_delay = delay;
+        ui_delay = delay_setting;
 
         c = stdscr.getch()
         if (c == ord('k')) or (c == curses.KEY_UP):
-            new_delay = delay + 10
-            logging.debug('key up; new_delay: %d' % (new_delay))
+            ui_delay = delay_setting + 10
+            logging.debug('key up; ui_delay: %d' % (ui_delay))
         if (c == ord('j')) or (c == curses.KEY_DOWN):
-            new_delay = delay - 10
-            logging.debug('key down; new_delay: %d' % (new_delay))
+            ui_delay = delay_setting - 10
+            logging.debug('key down; ui_delay: %d' % (ui_delay))
         if (c == curses.KEY_PPAGE) or (c == curses.KEY_RIGHT):
-            new_delay = delay + 500
-            logging.debug('key page up; new_delay: %d' % (new_delay))
+            ui_delay = delay_setting + 500
+            logging.debug('key page up; ui_delay: %d' % (ui_delay))
         if (c == curses.KEY_NPAGE) or (c == curses.KEY_LEFT):
-            new_delay = delay - 500
-            logging.debug('key page down; new_delay: %d' % (new_delay))
+            ui_delay = delay_setting - 500
+            logging.debug('key page down; ui_delay: %d' % (ui_delay))
         if c == ord('q'):
             break  # Exit the while loop
 
-        if (new_delay < 0):
-            new_delay = 0
-        if (new_delay != delay):
-            logging.debug('Set new delay: %d' % (new_delay))
-            socket_cmd.send(b"D:%d" % (new_delay))
-
-        time.sleep(0.05)
+        if (ui_delay < 0):
+            ui_delay = 0
+        if (ui_delay != delay_setting):
+            logging.debug('Set new delay: %d' % (ui_delay))
+            socket_cmd.send(b"D:%d" % (ui_delay))
+        else:
+           time.sleep(0.05)
 
 curses.wrapper(main)

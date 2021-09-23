@@ -6,16 +6,30 @@
 #include <alsa/asoundlib.h>
 
 typedef enum playback_state {
-    STOP = 0,
-    BUFFER,
-    PLAY,
-    DOUBLE,
+    STOP       =  0,
+    BUFFER_1_8 =  1,
+    BUFFER_2_8 =  2,
+    BUFFER_4_8 =  4,
+    BUFFER_6_8 =  6,
+    BUFFER_7_8 =  7,
+    PLAY       =  8,
+    PURGE_10_8 = 10,
+    PURGE_12_8 = 12,
+    PURGE_16_8 = 16,
+    PURGE_32_8 = 32,
 } playback_state_t;
 
 #define STATE_NAME(x)  \
     (x == STOP)?"STOP": \
-    (x == BUFFER)?"BUFFER": \
-    (x == PLAY)?"PLAY":"DOUBLE"
+    (x == BUFFER_1_8)?"BUFFER 12%": \
+    (x == BUFFER_2_8)?"BUFFER 25%": \
+    (x == BUFFER_4_8)?"BUFFER 50%": \
+    (x == BUFFER_6_8)?"BUFFER 75%": \
+    (x == BUFFER_7_8)?"BUFFER 87%": \
+    (x == PLAY)?"PLAY": \
+    (x == PURGE_10_8)?"PURGE 125%": \
+    (x == PURGE_12_8)?"PURGE 150%": \
+    (x == PURGE_16_8)?"PURGE 200%": "PURGE 400%"
 
 typedef struct buffer_config {
   /* unprotected paramters (only set once) */
@@ -41,4 +55,7 @@ typedef struct buffer_config {
 
   playback_state_t state;
 } buffer_config_t;
+
+int get_buf_pct(buffer_config_t *bc);
 #endif
+

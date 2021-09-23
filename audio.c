@@ -8,8 +8,9 @@
 #include "audio.h"
 #include "n2.h"
 
-#define HYSTERESIS  1  /* number of periods still considered in sync */
-#define PERIODS_IN_ALSABUF  5  /* Number of periods to keep in the ALSA buffer */
+//#define HYSTERESIS  1  /* number of periods still considered in sync */
+#define HYSTERESIS  11  /* number of ms still considered in sync */
+#define PERIODS_IN_ALSABUF  10  /* Number of periods to keep in the ALSA buffer */
 #define CAPTURE_PTR(x) (((x)->buffer) + ((x)->cap * (x)->period_bytes))
 #define PLAY_PTR(x) (((x)->buffer) + ((x)->play * (x)->period_bytes))
 
@@ -32,56 +33,59 @@ static void advance_cap_ptr(buffer_config_t *bc) {
 
 static int write_playback_period(buffer_config_t *bc) {
   int err;
-  int frameno, byteno;
+  float src_frame;
+  int dst_frame;
+  float target_frame = 0;
   uint8_t *audiodata = NULL;
   uint8_t *buf = NULL;
   int dataframes;
 
-  switch (bc->state){
-  case PLAY:
+  /*
+   *  bc->state enums map to playback rates where PLAY is the denominator i.e.:
+   *    BUFFER_1_8 / PLAY = 0.125  (playback at 12.5% speed)
+   *    PURGE_32_8 / PLAY = 4      (playback at 400% speed)
+   */
+  float playback_rate = ((float) bc->state) / PLAY;
+
+  /* rate at which frames should be skipped (used for speeding up playback */
+  float frame_skip = (bc->state > PLAY) ? playback_rate : 1;
+
+  /* rate at which frames should be duplicated (used for slowing down playback) */
+  float frame_dup = (bc->state < PLAY) ? 1.0 / playback_rate : 1;
+
+  if (bc->state == PLAY) {
+    /* no copy needed for regular speed playback */
     dataframes = bc->period_frames;
     audiodata = PLAY_PTR(bc);
-    break;
-  case BUFFER:
-    dataframes = 2 * bc->period_frames;
+  } else {
+    /* create a data buffer which is stretched/compressed based on state */
+    dataframes = (int)((float) bc->period_frames * (1.0 / playback_rate) + 0.5);
+    //printf("Playback rate: %.3f (%s)  frame_skip: %.2f  frame_dup: %.2f  "
+    //       "frame_size: %ld (%ld bytes)  buffer_size: %d (%d bytes)\n",
+    //       playback_rate, STATE_NAME(bc->state), frame_skip, frame_dup,
+    //       bc->period_frames, bc->period_frames * bc->frame_bytes,
+    //       dataframes, dataframes * bc->frame_bytes);
     buf = malloc(dataframes * bc->frame_bytes);
     audiodata = buf;
     if (!audiodata) {
       fprintf(stderr, "%s() Memory error\n", __func__);
       return -ENOMEM;
     }
-    for (frameno = 0, byteno = 0; frameno < bc->period_frames; frameno++) {
-      /* copy each frame twice */
-      memcpy(&(audiodata[byteno]),
-             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
-             bc->frame_bytes);
-      byteno += bc->frame_bytes;
-      memcpy(&(audiodata[byteno]),
-             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
-             bc->frame_bytes);
-      byteno += bc->frame_bytes;
+
+    /* src frame is accumulated as a float, but cast to int when used as offset */
+    for (src_frame = 0.0, dst_frame = 0; src_frame < bc->period_frames;) {
+      target_frame += frame_dup;
+      while (dst_frame < (int) target_frame) {
+        //printf("  source frame %d (%.3f) -> dst frame %d  [target: %.3f]\n",
+        //       (int)src_frame, src_frame, dst_frame, target_frame);
+        /* copy each frame twice */
+        memcpy(&(audiodata[dst_frame * bc->frame_bytes]),
+               PLAY_PTR(bc) + (((int)src_frame) * bc->frame_bytes),
+               bc->frame_bytes);
+        dst_frame++;
+      }
+      src_frame += frame_skip;
     }
-    break;
-  case DOUBLE:
-    dataframes = bc->period_frames / 2;
-    buf = malloc(dataframes * bc->frame_bytes);
-    audiodata = buf;
-    if (!audiodata) {
-      fprintf(stderr, "%s() Memory error\n", __func__);
-      return -ENOMEM;
-    }
-    /* copy every other frame */
-    for (frameno = 0, byteno = 0; frameno < bc->period_frames; ) {
-      memcpy(&(audiodata[byteno]),
-             PLAY_PTR(bc) + (frameno * bc->frame_bytes),
-             bc->frame_bytes);
-      frameno += 2;
-      byteno += bc->frame_bytes;
-    }
-    break;
-  default:
-    fprintf(stderr, "%s() Unkown state: %d\n", __func__, bc->state);
-    return -EINVAL;
   }
 
   err = snd_pcm_writei(bc->play_hndl, audiodata, dataframes);
@@ -130,14 +134,15 @@ void *audio_io_thread(void *ptr) {
   buffer_config_t *bc = (buffer_config_t *)ptr;
   int last_state = STOP;
   struct timeval initial_time, now_time;
-  int actual_delta;
-  unsigned int diff, period;
+  int actual_delta_p;
+  int time_off_ms;
+  unsigned int period;
 
   gettimeofday(&initial_time, NULL);
 
   while (bc->state) {
-    actual_delta = get_actual_delta(bc);
-    diff = abs(actual_delta - bc->target_delta_p);
+    actual_delta_p = get_actual_delta(bc);
+    time_off_ms = ((int)((bc->target_delta_p - actual_delta_p) * bc->period_time)) / 1000;
 
     /* Blocking read from capture interface (provies throttle to while loop) */
     if ((err = snd_pcm_readi(bc->cap_hndl, CAPTURE_PTR(bc), bc->period_frames))
@@ -153,18 +158,33 @@ void *audio_io_thread(void *ptr) {
      */
     for (period = bc->alsa_num_periods -  snd_pcm_avail(bc->play_hndl) / bc->period_frames;
          period < PERIODS_IN_ALSABUF; period++) {
-
+ 
       /* Give up if we're out of frames to send */
       if (bc->play == bc->cap) {
+printf("Abort writes at %d/%d because out of frames\n", period, PERIODS_IN_ALSABUF);
         break;
       }
 
-      if (diff <= HYSTERESIS) {
+      if (time_off_ms < -5000) {
+        bc->state = PURGE_32_8;
+      } else if (time_off_ms < -1500) {
+        bc->state = PURGE_16_8;
+      } else if (time_off_ms < -500) {
+        bc->state = PURGE_12_8;
+      } else if (time_off_ms < -HYSTERESIS) {
+        bc->state = PURGE_10_8;
+      } else if (time_off_ms < HYSTERESIS) {
         bc->state = PLAY;
-      } else if (actual_delta < bc->target_delta_p) {
-        bc->state = BUFFER;
+      } else if (time_off_ms < 300) {
+        bc->state = BUFFER_7_8;
+      } else if (time_off_ms < 1000) {
+        bc->state = BUFFER_6_8;
+      } else if (time_off_ms < 3000) {
+        bc->state = BUFFER_4_8;
+      } else if (time_off_ms < 6000) {
+        bc->state = BUFFER_2_8;
       } else {
-        bc->state = DOUBLE;
+        bc->state = BUFFER_1_8;
       }
 
       /*
@@ -182,8 +202,11 @@ void *audio_io_thread(void *ptr) {
       gettimeofday(&now_time, NULL);
       delta_us = (now_time.tv_sec - initial_time.tv_sec) * 1000000 +
                  ((int)now_time.tv_usec - (int)initial_time.tv_usec);
-      printf("%8.03f  STATE: %-8.8s CAP: %-4d  PLAY: %-4d  DELTA: %4d/%-4d  ALSABUF: %ld/%d\n",
-             delta_us / 1000000.0, STATE_NAME(bc->state), bc->cap, bc->play, actual_delta, bc->target_delta_p,
+      printf("%8.03f  STATE: %-10.10s CAP: %-4d  PLAY: %-4d  DELAY: %3.3f  "
+             "DELTA: %4d/%-4d  ALSABUF: %ld/%d\n",
+             delta_us / 1000000.0, STATE_NAME(bc->state), bc->cap, bc->play,
+             (bc->target_delta_p * bc->period_time) / 1000000.0, actual_delta_p,
+             bc->target_delta_p,
              bc->alsa_num_periods -  snd_pcm_avail(bc->play_hndl) / bc->period_frames,
 	     PERIODS_IN_ALSABUF);
     }
