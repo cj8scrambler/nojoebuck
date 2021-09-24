@@ -1,13 +1,9 @@
-CFLAGS=-Wall -Werror
-LDFLAGS=-lasound -lpthread -lzmq
+TOPTARGETS := all install uninstall clean
 
-all: nojoebuck
+SUBDIRS := src ui
 
-nojoebuck: main.o
-	$(CC) $(LDFLAGS) $^ -o $@
+$(TOPTARGETS): $(SUBDIRS)
+$(SUBDIRS):
+	$(MAKE) -C $@ $(MAKECMDGOALS)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $^
-
-clean:
-	rm *.o nojoebuck
+.PHONY: $(TOPTARGETS) $(SUBDIRS)

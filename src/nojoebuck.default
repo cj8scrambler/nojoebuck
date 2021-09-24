@@ -1,0 +1,37 @@
+# systemd configuration values for nojoebuck audio delay service.
+# Default values are listed below and commented out.
+#
+ 
+# Bit depth to capture at
+#
+#BITS="--bits 16"
+
+# Sampling Rate
+#
+#RATE="--rate 48000"
+
+# MB of Memory to reserve for buffer.  The determines the maximum delay
+# possible.  With the default sampling depth/rate, the default of 32MB
+# allows for up to 174.8 seconds of delay
+#
+#MEMORY="--memory 32"
+
+# ALSA compatible playback interface name.  To see which interfaces are
+#available on your system run: aplay -L
+#
+#PLAYBACK="--playback default"
+
+# ALSA compatible capture interface name.  To see which interfaces are
+#available on your system run: arecord -L
+#
+#CAPTURE="--capture default"
+
+# If set to '-v', the output is more verbose
+#
+#VERBOSE=""
+
+# If set to '-w', then wait for the specified playback and capture interfaces
+# to become available.  This is useful when starting at boot with systemd.
+#
+#WAIT=""
+WAIT="-w"
