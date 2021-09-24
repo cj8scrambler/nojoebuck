@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
+
+import signal
+import time
+import logging
 import zmq
 import microdotphat
-import threading
-import logging
-import time
 from RPi import GPIO
 
 UI_CMD = "ipc:///tmp/nojobuck_cmd"
@@ -14,6 +16,16 @@ DELAY_MODE_TIMEOUT = 1.5  # seconds to leave delay_setting screen up
 # Rotary encoder pins
 CLK_PIN = 17
 DT_PIN = 27
+
+class Run:
+  def __init__(self):
+    self.run = True;
+    signal.signal(signal.SIGINT, self.exit_gracefully)
+    signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+  def exit_gracefully(self, *args):
+    print("Got terminate signal")
+    self.run = False
 
 def show_buf(buf):
 
@@ -51,10 +63,12 @@ def main():
     server_buf = -1  # last buf value sent/recieved from UI server
     drawn_delay = -1 # last delay value drawn (higher priority than sent_delay)
     drawn_buf = -1  # last buf value drawn
+ 
+    r = Run();
 
-    logging.basicConfig(level=logging.ERROR,
+    logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
-    logging.debug("Starting up")
+    logging.debug("Starting up %d" % (r.run))
 
     # Setup rotary encoder inputs
     GPIO.setmode(GPIO.BCM)
@@ -92,7 +106,8 @@ def main():
     show_delay_setting(server_delay)
     drawn_delay = server_delay
 
-    while True:
+#    while r.keep_running():
+    while r.run:
         shouldSleep = True
 
         # Look for encoder input
@@ -154,6 +169,9 @@ def main():
             
         if (shouldSleep):
             time.sleep(0.01)
+
+    # Clean up
+    microdotphat.clear()
 
 if __name__ == "__main__":
     # execute only if run as a script

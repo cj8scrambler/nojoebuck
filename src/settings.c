@@ -20,6 +20,8 @@ static void usage(settings_t *settings, int retcode)
   printf("  -p, --playback=NAME    Name of playback interface (list with aplay -L)."
          "  Default: %s\n", settings->play_int);
   printf("  -r, --rate=RATE        Sample rate.  Default: %d\n", settings->rate);
+  printf("  -v, --verbose          Verbose outout\n");
+  printf("  -w, --wait             Wait for specified interfaces to become available\n");
 
   exit(retcode);
 }
@@ -45,7 +47,7 @@ void settings_get_opts(settings_t *settings, int argc, char *argv[])
       {NULL, 0, NULL, 0}
     };
 
-    c = getopt_long (argc, argv, "b:c:hm:p:r:v",
+    c = getopt_long (argc, argv, "b:c:hm:p:r:vw",
                        long_options, &option_index);
 
     /* Detect the end of the options. */
@@ -71,6 +73,10 @@ void settings_get_opts(settings_t *settings, int argc, char *argv[])
 
       case 'v':
 	settings->verbose = 1;
+        break;
+
+      case 'w':
+	settings->wait = 1;
         break;
 
       case 'c':

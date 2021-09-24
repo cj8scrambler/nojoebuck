@@ -1,0 +1,13 @@
+[Unit]
+Description=nojoebuck Sound Delay Service
+After=sound.target
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/default/nojoebuck
+ExecStart=/usr/bin/nojoebuck $BITS $RATE $MEMORY $CAPTURE $PLAYBACK $VERBOSE $WAIT
+User=daemon
+Group=audio
+
+[Install]
+WantedBy=multi-user.target

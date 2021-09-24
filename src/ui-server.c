@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <zmq.h>
 
 #include "nojoebuck.h"
@@ -158,6 +159,9 @@ static int ui_send_current_delay(buffer_config_t *bc) {
  * External Interface Functions
  */
 int ui_init(buffer_config_t *bc) {
+
+  /* set umask to 007 to allow group write and prevent world R/W/X */
+  umask(S_IRWXO);
 
   zmq_context_cmd = zmq_ctx_new();
   if (!zmq_context_cmd) {

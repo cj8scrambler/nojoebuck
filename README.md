@@ -20,7 +20,7 @@ platform.  Here are the basics:
 ## Setup
 
 The easiest way to setup is to clone the github repo onto the machine, build and install:
-  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils python3-microdotphat python3-zmq libzmq3-dev`
+  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils python3-microdotphat python3-zmq libzmq3-dev libsystemd-dev`
   1. Clone the repository: `git clone https://github.com/cj8scrambler/nojoebuck.git`
   1. Build: `cd nojoebuck; make`
   1. Install: `sudo make install`

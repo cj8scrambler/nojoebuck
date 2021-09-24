@@ -12,6 +12,7 @@ typedef struct settings {
   uint8_t verbose;
   snd_pcm_format_t format;
   uint32_t delay_ms;
+  uint8_t wait;
 } settings_t;
 
 void settings_get_opts(settings_t *settings, int argc, char *argv[]);

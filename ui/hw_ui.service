@@ -1,0 +1,16 @@
+[Unit]
+Description=Hardware UI for nojoebuck Sound Delay Service
+Requires=nojoebuck.service
+After=nojoebuck.service
+PartOf=nojoebuck.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hw_ui.py
+# Running as user pi for access to /dev/gpiomem
+# Running as group audo for access to nojoebuck IPC interfaces
+User=pi
+Group=audio
+
+[Install]
+WantedBy=multi-user.target

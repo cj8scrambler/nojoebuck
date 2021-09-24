@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import curses
 import zmq
 import logging
@@ -110,8 +112,7 @@ def main(stdscr):
     global delay_setting
     global buf
 
-#    logging.basicConfig(filename='log',level=logging.ERROR)
-    logging.basicConfig(filename='log',level=logging.DEBUG)
+    logging.basicConfig(filename='log',level=logging.INFO)
 
     socket_cmd = zmq.Context().socket(zmq.PUSH)
     socket_cmd.connect (UI_CMD)

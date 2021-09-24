@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <alsa/asoundlib.h>
+#include <systemd/sd-daemon.h>
 
 #include "nojoebuck.h"
 #include "settings.h"
@@ -100,6 +101,7 @@ int config_both_streams(settings_t *settings, buffer_config_t *bc) {
 int main(int argc, char *argv[]) {
 
   int ret;
+  unsigned int try = 0;
 
   pthread_t audio_thread;
   pthread_t ui_thread;
@@ -115,23 +117,44 @@ int main(int argc, char *argv[]) {
     .memory = 32*1024*1024,
     .verbose = 0,
     .delay_ms = 5000,
+    .wait = 0,
   };
 
   settings_get_opts(&settings, argc, argv);
 
-  if ((ret = snd_pcm_open(&(buffer_config.cap_hndl), settings.cap_int,
-                          SND_PCM_STREAM_CAPTURE, 0)) < 0) {
-    fprintf(stderr, "cannot open audio device %s (%s)\n",
-            settings.cap_int, snd_strerror(ret));
-    exit(1);
-  }
+  do {
+    if ((ret = snd_pcm_open(&(buffer_config.cap_hndl), settings.cap_int,
+                            SND_PCM_STREAM_CAPTURE, 0)) < 0) {
+      if (ret == -ENOENT && settings.wait) {
+        usleep(200000);
+        if ((try++ % 25) == 0) {
+          printf("Waiting for capture interface '%s' to become available\n",
+                 settings.cap_int);
+        }
+      } else {
+        fprintf(stderr, "cannot open audio device %s (%s)\n",
+                settings.cap_int, snd_strerror(ret));
+          exit(1);
+      }
+    }
+  } while (ret < 0);
 
-  if ((ret = snd_pcm_open(&(buffer_config.play_hndl), settings.play_int,
-                          SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-    fprintf(stderr, "cannot open audio device %s (%s)\n",
-            settings.play_int, snd_strerror(ret));
-    exit(1);
-  }
+  do {
+    if ((ret = snd_pcm_open(&(buffer_config.play_hndl), settings.play_int,
+                            SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
+      if (ret == -ENOENT && settings.wait) {
+        usleep(200000);
+        if ((try++ % 25) == 0) {
+          printf("Waiting for playback interface '%s' to become available\n",
+                 settings.cap_int);
+        }
+      } else {
+        fprintf(stderr, "cannot open audio device %s (%s)\n",
+                settings.play_int, snd_strerror(ret));
+        exit(1);
+      }
+    }
+  } while (ret < 0);
 
   if ((ret = config_both_streams(&settings, &buffer_config)) < 0) {
     fprintf(stderr, "cannot open audio device %s (%s)\n",
@@ -179,11 +202,17 @@ int main(int argc, char *argv[]) {
   printf("Max Delay:    %.1f seconds\n", (settings.memory / buffer_config.period_bytes) *
                                          (buffer_config.period_time / 1000000.0));
 
+  /* Notify systemd that we're ready */
+  sd_notify(0, "READY=1");
+
   while (buffer_config.state)
   {
     /* nothing left to do here */
     pause();
   }
+
+  /* Notify systemd that we're done */
+  sd_notify(0, "STOPPING=1");
 
   pthread_join(ui_thread, NULL);
   ui_cleanup();
