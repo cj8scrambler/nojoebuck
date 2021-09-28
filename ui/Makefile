@@ -5,7 +5,7 @@ install:
 	install -m 755 hw_ui.py /usr/bin
 	install -m 644 hw_ui.service /usr/lib/systemd/system/
 	systemctl enable hw_ui
-	systemctl start hw_ui
+	systemctl start --no-block hw_ui
 
 uninstall:
 	-systemctl stop hw_ui

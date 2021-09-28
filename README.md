@@ -12,44 +12,61 @@ platform.  Here are the basics:
   * Raspberry Pi Zero - Any Linux machine will work, but this is cheap and small
   * ALSA compatible capture and playback devices
     * Full size Raspberry Pis have playback interfaces but will need a capture device
-    * Pi Zero has no audio interfaces, so I used the [Zero Soundcard][https://www.audioinjector.net/rpi-zero]
+    * Pi Zero has no audio interfaces, so I used the [Zero Soundcard](https://www.audioinjector.net/rpi-zero)
   * Optional hardware based UI
-    * [Microdot PHAT][https://shop.pimoroni.com/products/microdot-phat?variant=25454635591]
-    * [Rotary Encoder][https://www.adafruit.com/product/377]
+    * [Microdot PHAT](https://shop.pimoroni.com/products/microdot-phat?variant=25454635591)
+    * [Rotary Encoder](https://www.adafruit.com/product/377)
 
 ## Setup
 
 The easiest way to setup is to clone the github repo onto the machine, build and install:
-  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils python3-microdotphat python3-zmq libzmq3-dev libsystemd-dev`
+  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils libasound2-dev python3-microdotphat python3-zmq libzmq3-dev libsystemd-dev`
   1. Clone the repository: `git clone https://github.com/cj8scrambler/nojoebuck.git`
   1. Build: `cd nojoebuck; make`
-  1. Install: `sudo make install`
-  1. Enable nojoebuck at boot: `sudo systemctl enable nojoebuck`
-  1. Optional: Enable HW based UI at boot: `sudo systemctl enable njb-hw-ui`
+  1. Install as systemd services: `sudo make install`
 
 ## Usage
 
-nojoebuck can be started as a systemd service.  Options can be configured in
+nojoebuck is started as a systemd service.  Options can be configured in
 `/etc/default/nojoebuck`.  The default values are listed there.
 ```
+# systemd configuration values for nojoebuck audio delay service.
+# Default values are listed below and commented out.
+#
+ 
 # Bit depth to capture at
-#BITS=16 
+#
+#BITS="--bits 16"
 
 # Sampling Rate
-#RATE=48000 
+#
+#RATE="--rate 48000"
 
 # MB of Memory to reserve for buffer.  The determines the maximum delay
 # possible.  With the default sampling depth/rate, the default of 32MB
 # allows for up to 174.8 seconds of delay
-#MEMORY=32 
+#
+#MEMORY="--memory 32"
 
 # ALSA compatible playback interface name.  To see which interfaces are
-available on your system run: aplay -L
-#CAPTURE="default"
+#available on your system run: aplay -L
+#
+#PLAYBACK="--playback default"
 
 # ALSA compatible capture interface name.  To see which interfaces are
-available on your system run: arecord -L
-#CAPTURE="default"
+#available on your system run: arecord -L
+#
+#CAPTURE="--capture default"
+
+# If set to '-v', the output is more verbose
+#
+#VERBOSE=""
+
+# If set to '-w', then wait for the specified playback and capture interfaces
+# to become available.  This is useful when starting at boot with systemd.
+#
+#WAIT=""
+WAIT="-w"
 ```
 
 ## Background

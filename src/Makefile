@@ -14,7 +14,7 @@ install: nojoebuck
 	install -m 644 nojoebuck.service /usr/lib/systemd/system/
 	install -m 644 nojoebuck.default /etc/default/nojoebuck
 	systemctl enable nojoebuck
-	systemctl start nojoebuck
+	systemctl start --no-block nojoebuck
 
 uninstall:
 	-systemctl stop nojoebuck
