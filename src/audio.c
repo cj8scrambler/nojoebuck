@@ -9,7 +9,6 @@
 #include "audio.h"
 
 #define HYSTERESIS  11  /* number of ms still considered in sync */
-#define PERIODS_IN_ALSABUF  10  /* Number of periods to keep in the ALSA buffer */
 #define CAPTURE_PTR(x) (((x)->buffer) + ((x)->cap * (x)->period_bytes))
 #define PLAY_PTR(x) (((x)->buffer) + ((x)->play * (x)->period_bytes))
 

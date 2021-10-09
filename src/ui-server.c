@@ -55,21 +55,21 @@ static void *zmq_context_cmd = NULL;
 static void *ui_status = NULL;
 static void *zmq_context_status = NULL;
 
-static void update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
+static int update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
 
   if (!bc) {
     fprintf(stderr, "%s() invalid call\n", __func__);
-    return;
+    return -EINVAL;
   }
 
   if (delay_ms > (bc->max_delay_ms)) {
     fprintf(stderr, "Error: delay too large: %d\n", delay_ms);
-    return;
+    return -ERANGE;
   }
 
   if (delay_ms < (bc->min_delay_ms)) {
     fprintf(stderr, "Error: delay too small: %d/%d\n", delay_ms, bc->min_delay_ms);
-    return;
+    return -ERANGE;
   }
 
   pthread_mutex_lock(&bc->lock);
@@ -81,6 +81,8 @@ static void update_delay_setting(buffer_config_t *bc, unsigned int delay_ms) {
             (bc->target_delta_p * bc->period_time) / 1000000.0,
             bc->target_delta_p);
   }
+
+  return 0;
 }
 
 /* return negative on error, buffer value on success */
@@ -95,7 +97,7 @@ static int ui_send_buf(buffer_config_t *bc) {
   buf_pct = get_buf_pct(bc);
   snprintf(buffer, MAX_UI_CMD, "B:%d", buf_pct);
   if (bc->verbose) {
-    printf("UI BUFFER: %d (%s)\n", buf_pct, buffer);
+    printf("UI send: %s\n", buffer);
   }
 
   if (strlen(buffer) != (ret = zmq_send(ui_status, buffer, strlen(buffer), 0))) {
@@ -119,7 +121,7 @@ static int ui_send_delay_setting(buffer_config_t *bc) {
   snprintf(buffer, MAX_UI_CMD, "D:%d", delay);
 
   if (bc->verbose) {
-    printf("UI DELAY SETTING: %d (%s)\n", delay, buffer);
+    printf("UI send %s\n", buffer);
   }
   
   if (strlen(buffer) != zmq_send (ui_status, buffer,
@@ -143,7 +145,7 @@ static int ui_send_current_delay(buffer_config_t *bc) {
   snprintf(buffer, MAX_UI_CMD, "C:%d", delay);
 
   if (bc->verbose) {
-    printf("UI CURRENT DELAY: %d (%s)\n", delay, buffer);
+    printf("UI send %s\n", buffer);
   }
   
   if (strlen(buffer) != zmq_send (ui_status, buffer,
@@ -233,8 +235,17 @@ void *ui_server_thread(void *data) {
       if (token && !strcmp(token, "D")) {
         token = strtok(NULL, ":");
         if (token) {
-          update_delay_setting(bc, strtol(token, NULL, 10));
-        } else {
+          int new_delay = strtol(token, NULL, 10);
+          if (new_delay > 0) {
+              ret = update_delay_setting(bc, new_delay);
+          } else {
+              fprintf(stderr, "Ignoring negative delay request\n");
+          }
+        }
+
+        /* If requested, or if update failed (probably out of range),
+         * then send out current delay */
+        if ((!token) || (ret != 0)) {
           ret = ui_send_delay_setting(bc);
           if (ret > 0) {
             last_delay_setting = ret;
@@ -273,7 +284,7 @@ void *ui_server_thread(void *data) {
 
     current_delay = (get_actual_delta(bc) * bc->period_time) / 1000;
     /* check for changes in current delay since report */
-    if (abs(current_delay - last_current_delay) > 11) {
+    if (abs(current_delay - last_current_delay) > 50) {
       ret = ui_send_current_delay(bc);
       if (ret > 0) {
         last_current_delay = ret;

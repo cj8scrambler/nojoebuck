@@ -7,6 +7,8 @@ from a radio broadcast to a streamed video of the same broadcast.
 
 ## Hardware
 
+![render](img/NoJoeBuck_v20_render.png)
+
 This can run on any Linux platform, but the Raspberry Pi Zero was the intended
 platform.  Here are the basics:
   * Raspberry Pi Zero - Any Linux machine will work, but this is cheap and small
@@ -15,15 +17,18 @@ platform.  Here are the basics:
     * Pi Zero has no audio interfaces, so I used the [Zero Soundcard](https://www.audioinjector.net/rpi-zero)
   * Optional hardware based UI
     * [Microdot PHAT](https://shop.pimoroni.com/products/microdot-phat?variant=25454635591)
-    * [Rotary Encoder](https://www.adafruit.com/product/377)
+    * [Rotary Encoder](https://www.adafruit.com/product/4991)
+  * I've created a [case](hw/) that can be 3D printed for the above hardware configuration
 
 ## Setup
 
 The easiest way to setup is to clone the github repo onto the machine, build and install:
-  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils libasound2-dev python3-microdotphat python3-zmq libzmq3-dev libsystemd-dev`
+  1. Install dependencies:  `sudo apt-get install build-essential git alsa-utils libasound2-dev python3-microdotphat python3-zmq python3-smbus2 libzmq3-dev libsystemd-dev`
   1. Clone the repository: `git clone https://github.com/cj8scrambler/nojoebuck.git`
   1. Build: `cd nojoebuck; make`
   1. Install as systemd services: `sudo make install`
+
+Be sure that your sound capture and playback devices are running and configured in the mixer.  The Zero Soundcard has instructions [here](https://github.com/Audio-Injector/stereo-and-zero)
 
 ## Usage
 

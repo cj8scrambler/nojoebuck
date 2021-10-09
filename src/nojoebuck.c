@@ -19,8 +19,14 @@ int get_buf_pct(buffer_config_t *bc) {
   /* Clip at 200 % */
   if (buf_pct > 200) {
     buf_pct = 200;
-  /* Round 99/101 off to 100 to stabalize the UI */
-  } else if (buf_pct >= 99 && buf_pct <= 101) {
+  }
+
+  /* Round near 100 to stabalize the UI
+     Larger error at small deltas so round more
+   */
+  else if ((buf_pct >= 99 && buf_pct <= 101) ||
+      ((bc->target_delta_p < 200) &&
+       (buf_pct >= 96 && buf_pct <= 104))) {
     buf_pct = 100;
   }
 
@@ -163,7 +169,7 @@ int main(int argc, char *argv[]) {
   }
 
   pthread_mutex_lock(&(buffer_config.lock));
-  buffer_config.min_delay_ms = (5 * buffer_config.period_time) / 1000;
+  buffer_config.min_delay_ms = (PERIODS_IN_ALSABUF * buffer_config.period_time) / 1000;
   buffer_config.max_delay_ms = ((settings.memory / buffer_config.period_bytes) * buffer_config.period_time) / 1000;
   buffer_config.state = BUFFER_4_8;
   buffer_config.target_delta_p = (settings.delay_ms * 1000) /  buffer_config.period_time;
